@@ -1,6 +1,9 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
+const os = require('os');
+const { spawn } = require('child_process');
+const packageJson = require('../package.json');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
@@ -16,6 +19,193 @@ const recentLogs = [];
 
 const AEPHIA_TOKEN_VALIDATE_URL = 'https://api.aephia.com/token/validate';
 const AEPHIA_API_KEY_VALIDATION_BYPASS = false; // Re-enable Aephia token validation.
+const GITHUB_REPO = 'aephiaviktor/gm-market-bot';
+const GITHUB_TAGS_URL = `https://api.github.com/repos/${GITHUB_REPO}/tags`;
+const APP_DISPLAY_NAME = 'GM Market Bot';
+
+function installApplicationMenu() {
+  const appVersion = packageJson.version || 'unknown';
+  const menu = Menu.buildFromTemplate([
+    {
+      label: 'File',
+      submenu: [
+        { role: 'quit' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'About',
+          click: () => {
+            dialog.showMessageBox(mainWindow || undefined, {
+              type: 'info',
+              title: `About ${APP_DISPLAY_NAME}`,
+              message: `${APP_DISPLAY_NAME} v${appVersion}`,
+              detail: `Electron ${process.versions.electron}\nChrome ${process.versions.chrome}\nNode ${process.versions.node}`,
+              buttons: ['OK'],
+            });
+          },
+        },
+      ],
+    },
+  ]);
+
+  Menu.setApplicationMenu(menu);
+}
+
+function getAppRoot() {
+  return path.resolve(__dirname, '..');
+}
+
+async function readPackageVersion() {
+  const raw = await fs.readFile(path.join(getAppRoot(), 'package.json'), 'utf8');
+  return JSON.parse(raw).version;
+}
+
+function normalizeVersion(value) {
+  return String(value || '').trim().replace(/^v/i, '');
+}
+
+function compareVersions(a, b) {
+  const left = normalizeVersion(a).split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const right = normalizeVersion(b).split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i++) {
+    if ((left[i] || 0) > (right[i] || 0)) return 1;
+    if ((left[i] || 0) < (right[i] || 0)) return -1;
+  }
+  return 0;
+}
+
+async function fetchGithubJson(url) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'gm-market-bot-updater',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub request failed: HTTP ${response.status}`);
+  }
+  return await response.json();
+}
+
+async function getLatestGithubVersion() {
+  const tags = await fetchGithubJson(GITHUB_TAGS_URL);
+  const versions = (Array.isArray(tags) ? tags : [])
+    .map((tag) => String(tag?.name || '').trim())
+    .filter((name) => /^v?\d+\.\d+\.\d+/.test(name))
+    .sort((a, b) => compareVersions(b, a));
+
+  if (!versions.length) {
+    throw new Error('No version tags found on GitHub.');
+  }
+
+  const tag = versions[0];
+  return {
+    tag,
+    version: normalizeVersion(tag),
+    url: `https://github.com/${GITHUB_REPO}/releases/tag/${tag}`,
+    tarballUrl: `https://github.com/${GITHUB_REPO}/archive/refs/tags/${tag}.tar.gz`,
+  };
+}
+
+async function checkForUpdates() {
+  const currentVersion = await readPackageVersion();
+  const latest = await getLatestGithubVersion();
+  return {
+    currentVersion,
+    latestVersion: latest.version,
+    latestTag: latest.tag,
+    updateAvailable: compareVersions(latest.version, currentVersion) > 0,
+    releaseUrl: latest.url,
+  };
+}
+
+function runCommand(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || getAppRoot(),
+      shell: process.platform === 'win32',
+      windowsHide: true,
+    });
+
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      output += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(output);
+      } else {
+        reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}: ${output.slice(-2000)}`));
+      }
+    });
+  });
+}
+
+async function downloadFile(url, targetPath) {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'gm-market-bot-updater' },
+  });
+  if (!response.ok) {
+    throw new Error(`Download failed: HTTP ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  await fs.writeFile(targetPath, buffer);
+}
+
+async function downloadUpdateAndRestart() {
+  const latest = await getLatestGithubVersion();
+  const currentVersion = await readPackageVersion();
+  if (compareVersions(latest.version, currentVersion) <= 0) {
+    return { updated: false, currentVersion, latestVersion: latest.version };
+  }
+
+  if (botRunning) {
+    await stopBot();
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gm-market-bot-update-'));
+  const archivePath = path.join(tempDir, `${latest.tag}.tar.gz`);
+  await downloadFile(latest.tarballUrl, archivePath);
+  await runCommand('tar', ['-xzf', archivePath, '-C', tempDir], { cwd: tempDir });
+
+  const entries = await fs.readdir(tempDir, { withFileTypes: true });
+  const extracted = entries.find((entry) => entry.isDirectory() && entry.name.startsWith('gm-market-bot-'));
+  if (!extracted) {
+    throw new Error('Downloaded update archive did not contain the expected project folder.');
+  }
+
+  const extractedRoot = path.join(tempDir, extracted.name);
+  await fs.cp(extractedRoot, getAppRoot(), {
+    recursive: true,
+    force: true,
+    filter: (source) => {
+      const rel = path.relative(extractedRoot, source);
+      return !rel.startsWith('.git') && !rel.startsWith('node_modules') && !rel.startsWith('analysis');
+    },
+  });
+
+  await runCommand('npm', ['install'], { cwd: getAppRoot() });
+  await runCommand('npm', ['run', 'build'], { cwd: getAppRoot() });
+
+  app.relaunch();
+  app.exit(0);
+  return { updated: true, currentVersion, latestVersion: latest.version };
+}
 
 function getAephiaApiKey(config) {
   return String(config?.AEPHIA_API_KEY || '').trim();
@@ -381,7 +571,16 @@ ipcMain.handle('bot:status', async () => {
   }
 });
 
+ipcMain.handle('updates:check', async () => {
+  return await checkForUpdates();
+});
+
+ipcMain.handle('updates:download-and-restart', async () => {
+  return await downloadUpdateAndRestart();
+});
+
 app.whenReady().then(async () => {
+  installApplicationMenu();
   createWindow();
 
   try {

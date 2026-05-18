@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('botApi', {
   cancelOrder: (payload) => ipcRenderer.invoke('bot:cancel-order', payload),
   getBotStatus: () => ipcRenderer.invoke('bot:status'),
   rerunAssets: (assets) => ipcRenderer.invoke('bot:rerun-assets', assets),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  downloadUpdateAndRestart: () => ipcRenderer.invoke('updates:download-and-restart'),
   onLog: (handler) => {
     const wrapped = (_event, payload) => handler(payload);
     ipcRenderer.on('bot-log', wrapped);

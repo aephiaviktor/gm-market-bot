@@ -114,23 +114,10 @@ h3 {
 
 .app-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
-}
-
-#status {
-  display: inline-block;
-  margin-bottom: 0;
-  padding: 5px 10px;
-  border: 1px solid rgba(160, 208, 255, 0.28);
-  border-radius: 999px;
-  background: rgba(15, 37, 73, 0.9);
-  color: #d9eeff;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 .panel,
@@ -755,6 +742,11 @@ select:focus {
   margin-top: 12px;
 }
 
+.rail-update-btn {
+  min-width: 70px;
+  padding: 6px 12px;
+}
+
 button {
   border: 1px solid rgba(136, 191, 255, 0.34);
   color: #f7fbff;
@@ -773,6 +765,69 @@ button:hover:enabled {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(2, 8, 18, 0.72);
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.update-dialog {
+  width: min(460px, 100%);
+  border: 1px solid rgba(143, 193, 255, 0.28);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #0c2548 0%, #081a35 100%);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+  padding: 20px;
+}
+
+.update-dialog h2 {
+  margin-bottom: 14px;
+}
+
+.update-version-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 9px 18px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(143, 193, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(4, 16, 34, 0.62);
+  font-size: 13px;
+}
+
+.update-version-grid span {
+  color: #9fc8ea;
+}
+
+.update-version-grid strong {
+  color: #f4fbff;
+}
+
+.update-message {
+  min-height: 38px;
+  margin: 14px 0 0;
+  color: #d7ebfb;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.update-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }
 
 #logs {

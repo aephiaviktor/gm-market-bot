@@ -12,14 +12,20 @@ const fields = [
 
 const STATUS_POLL_MS = 60000;
 const AUTO_RERUN_COOLDOWN_MS = 120000;
-const APP_VERSION = '0.1.17';
+const APP_VERSION = '0.1.18';
 
 const form = document.getElementById('config-form');
-const statusEl = document.getElementById('status');
 const logsEl = document.getElementById('logs');
 const saveBtn = document.getElementById('save-btn');
 const startBtn = document.getElementById('start-btn');
 const stopBtn = document.getElementById('stop-btn');
+const updateBtn = document.getElementById('update-btn');
+const updateModal = document.getElementById('update-modal');
+const updateCurrentVersionEl = document.getElementById('update-current-version');
+const updateLatestVersionEl = document.getElementById('update-latest-version');
+const updateMessageEl = document.getElementById('update-message');
+const updateConfirmBtn = document.getElementById('update-confirm-btn');
+const updateCancelBtn = document.getElementById('update-cancel-btn');
 const addRuleRowBtn = document.getElementById('add-rule-row-btn');
 const toggleSensitiveBtn = document.getElementById('toggle-sensitive-btn');
 const assetRulesBody = document.getElementById('asset-rules-body');
@@ -55,6 +61,7 @@ let previousAssetSignals = new Map();
 const assetLastRerunAtMs = new Map();
 let rerunInFlight = false;
 let activeAssetRuleGroup = 'raw';
+let availableUpdate = null;
 
 const RAW_MATERIAL_START = 'Arco';
 const RAW_MATERIAL_END = 'Titanium Ore';
@@ -67,13 +74,57 @@ const SHIP_PARTS_END = 'Rainbow Phi (ship parts)';
 const ASSET_RULE_GROUPS = new Set(['raw', 'components', 'ships', 'ship-parts']);
 
 function setRunning(running) {
-  statusEl.textContent = `Status: ${running ? 'running' : 'stopped'}`;
   startBtn.disabled = running;
   stopBtn.disabled = !running;
 
   runningPillEl.textContent = running ? 'Running' : 'Stopped';
   runningPillEl.classList.toggle('running', running);
   runningPillEl.classList.toggle('stopped', !running);
+}
+
+function setUpdateModalOpen(open) {
+  updateModal.hidden = !open;
+}
+
+function renderUpdateModalState(result, error = null) {
+  updateCurrentVersionEl.textContent = `v${result?.currentVersion || APP_VERSION}`;
+  updateLatestVersionEl.textContent = result?.latestVersion ? `v${result.latestVersion}` : 'Unknown';
+  updateConfirmBtn.disabled = !result?.updateAvailable;
+
+  if (error) {
+    updateLatestVersionEl.textContent = 'Unavailable';
+    updateMessageEl.textContent = `Update check failed: ${error?.message || String(error)}`;
+    return;
+  }
+
+  if (result?.updateAvailable) {
+    updateMessageEl.textContent = `A newer GM Market Bot version is available on GitHub.`;
+    updateConfirmBtn.textContent = `Update to v${result.latestVersion}`;
+    return;
+  }
+
+  updateMessageEl.textContent = 'GM Market Bot is already up to date.';
+  updateConfirmBtn.textContent = 'Update';
+}
+
+async function openUpdateDialog() {
+  availableUpdate = null;
+  updateCurrentVersionEl.textContent = `v${APP_VERSION}`;
+  updateLatestVersionEl.textContent = 'Checking...';
+  updateMessageEl.textContent = 'Checking GitHub for the latest version...';
+  updateConfirmBtn.textContent = 'Update';
+  updateConfirmBtn.disabled = true;
+  updateCancelBtn.disabled = false;
+  setUpdateModalOpen(true);
+
+  try {
+    availableUpdate = await window.botApi.checkForUpdates();
+    renderUpdateModalState(availableUpdate);
+  } catch (err) {
+    availableUpdate = null;
+    renderUpdateModalState(null, err);
+    appendLog(`[${new Date().toISOString()}] [ERROR] Update check failed: ${err?.message || String(err)}`);
+  }
 }
 
 function setSensitiveVisible(visible) {
@@ -557,7 +608,7 @@ function renderInventory(items) {
   setListCount(inventoryCountEl, visibleItems.length);
 
   if (!visibleItems.length) {
-    inventoryListEl.innerHTML = '<div class="empty-state">No tracked inventory</div>';
+    inventoryListEl.innerHTML = '<div class="empty-state">All tracked inventory is 0</div>';
     return;
   }
 
@@ -946,6 +997,37 @@ startBtn.addEventListener('click', async () => {
 stopBtn.addEventListener('click', async () => {
   await window.botApi.stopBot();
   await refreshBotStatus();
+});
+
+updateBtn.addEventListener('click', () => {
+  void openUpdateDialog();
+});
+
+updateCancelBtn.addEventListener('click', () => {
+  setUpdateModalOpen(false);
+});
+
+updateModal.addEventListener('click', (event) => {
+  if (event.target === updateModal) {
+    setUpdateModalOpen(false);
+  }
+});
+
+updateConfirmBtn.addEventListener('click', async () => {
+  if (!availableUpdate?.updateAvailable) return;
+  updateConfirmBtn.disabled = true;
+  updateCancelBtn.disabled = true;
+  updateMessageEl.textContent = `Downloading GM Market Bot v${availableUpdate.latestVersion} and restarting...`;
+  appendLog(
+    `[${new Date().toISOString()}] [INFO] Downloading GM Market Bot v${availableUpdate.latestVersion} and restarting...`,
+  );
+  try {
+    await window.botApi.downloadUpdateAndRestart();
+  } catch (err) {
+    updateCancelBtn.disabled = false;
+    renderUpdateModalState(availableUpdate, err);
+    appendLog(`[${new Date().toISOString()}] [ERROR] Update failed: ${err?.message || String(err)}`);
+  }
 });
 
 addRuleRowBtn.addEventListener('click', () => {
