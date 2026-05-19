@@ -12,7 +12,7 @@ const fields = [
 
 const STATUS_POLL_MS = 60000;
 const AUTO_RERUN_COOLDOWN_MS = 120000;
-const APP_VERSION = '0.1.18';
+const APP_VERSION = '0.1.19';
 
 const form = document.getElementById('config-form');
 const logsEl = document.getElementById('logs');
@@ -57,11 +57,14 @@ let statusPollHandle = null;
 let lastSavedConfig = null;
 let lastSavedAssetRules = [];
 let lastUiRefreshAtMs = null;
+let lastUpdateCheckCycleCompletedAt = null;
 let previousAssetSignals = new Map();
 const assetLastRerunAtMs = new Map();
 let rerunInFlight = false;
 let activeAssetRuleGroup = 'raw';
 let availableUpdate = null;
+let updateCheckInFlight = false;
+let updateCheckPromise = null;
 
 const RAW_MATERIAL_START = 'Arco';
 const RAW_MATERIAL_END = 'Titanium Ore';
@@ -86,6 +89,16 @@ function setUpdateModalOpen(open) {
   updateModal.hidden = !open;
 }
 
+function renderUpdateButtonState(result, error = null) {
+  const updateAvailable = Boolean(result?.updateAvailable);
+  updateBtn.classList.toggle('update-available', updateAvailable);
+  updateBtn.title = updateAvailable
+    ? `Update available: v${result.latestVersion}`
+    : error
+      ? 'Update check failed'
+      : 'Check for updates';
+}
+
 function renderUpdateModalState(result, error = null) {
   updateCurrentVersionEl.textContent = `v${result?.currentVersion || APP_VERSION}`;
   updateLatestVersionEl.textContent = result?.latestVersion ? `v${result.latestVersion}` : 'Unknown';
@@ -108,23 +121,61 @@ function renderUpdateModalState(result, error = null) {
 }
 
 async function openUpdateDialog() {
-  availableUpdate = null;
+  const cachedUpdate = availableUpdate;
+  if (!cachedUpdate?.updateAvailable) {
+    availableUpdate = null;
+  }
   updateCurrentVersionEl.textContent = `v${APP_VERSION}`;
-  updateLatestVersionEl.textContent = 'Checking...';
-  updateMessageEl.textContent = 'Checking GitHub for the latest version...';
+  updateLatestVersionEl.textContent = cachedUpdate?.latestVersion ? `v${cachedUpdate.latestVersion}` : 'Checking...';
+  updateMessageEl.textContent = cachedUpdate?.updateAvailable
+    ? 'A newer GM Market Bot version is available on GitHub.'
+    : 'Checking GitHub for the latest version...';
   updateConfirmBtn.textContent = 'Update';
   updateConfirmBtn.disabled = true;
   updateCancelBtn.disabled = false;
   setUpdateModalOpen(true);
 
   try {
-    availableUpdate = await window.botApi.checkForUpdates();
+    availableUpdate = await checkForUpdatesAndRenderButton();
     renderUpdateModalState(availableUpdate);
   } catch (err) {
     availableUpdate = null;
     renderUpdateModalState(null, err);
     appendLog(`[${new Date().toISOString()}] [ERROR] Update check failed: ${err?.message || String(err)}`);
   }
+}
+
+async function checkForUpdatesAndRenderButton() {
+  if (updateCheckInFlight) {
+    return updateCheckPromise || availableUpdate;
+  }
+
+  updateCheckInFlight = true;
+  updateCheckPromise = window.botApi.checkForUpdates();
+  try {
+    const result = await updateCheckPromise;
+    availableUpdate = result;
+    renderUpdateButtonState(result);
+    return result;
+  } catch (err) {
+    renderUpdateButtonState(null, err);
+    throw err;
+  } finally {
+    updateCheckInFlight = false;
+    updateCheckPromise = null;
+  }
+}
+
+function maybeCheckForUpdatesAfterCycle(snapshot) {
+  const completedAt = snapshot?.lastCycleCompletedAt || null;
+  if (!completedAt || completedAt === lastUpdateCheckCycleCompletedAt) {
+    return;
+  }
+
+  lastUpdateCheckCycleCompletedAt = completedAt;
+  void checkForUpdatesAndRenderButton().catch((err) => {
+    appendLog(`[${new Date().toISOString()}] [WARN] Update check failed: ${err?.message || String(err)}`);
+  });
 }
 
 function setSensitiveVisible(visible) {
@@ -838,6 +889,7 @@ function renderStatusSnapshot(snapshot) {
   renderInventory(Array.isArray(snapshot?.inventory) ? snapshot.inventory : []);
   renderRecentActivity(Array.isArray(snapshot?.recentActivity) ? snapshot.recentActivity : []);
 
+  maybeCheckForUpdatesAfterCycle(snapshot);
   void maybeAutoRerunFromStatus(snapshot, running);
 }
 
@@ -945,6 +997,9 @@ async function boot() {
 
   await refreshBotStatus();
   startStatusPolling();
+  void checkForUpdatesAndRenderButton().catch((err) => {
+    appendLog(`[${new Date().toISOString()}] [WARN] Update check failed: ${err?.message || String(err)}`);
+  });
 }
 
 saveBtn.addEventListener('click', async () => {

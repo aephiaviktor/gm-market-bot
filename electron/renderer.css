@@ -747,6 +747,10 @@ select:focus {
   padding: 6px 12px;
 }
 
+.rail-update-btn.update-available {
+  color: #69f08f;
+}
+
 button {
   border: 1px solid rgba(136, 191, 255, 0.34);
   color: #f7fbff;
