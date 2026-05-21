@@ -303,6 +303,7 @@ function normalizeAssetRules(rows) {
     asset: String(row?.asset ?? ''),
     side: row?.side === 'buy' ? 'buy' : 'sell',
     quantity: String(row?.quantity ?? ''),
+    limit: String(row?.limit ?? ''),
     price: String(row?.price ?? ''),
     group: String(row?.group ?? ''),
   }));

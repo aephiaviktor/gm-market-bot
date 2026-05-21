@@ -94,11 +94,16 @@ Each asset rule defines:
 - Asset
 - Side: buy or sell
 - Quantity
+- Limit
 - Price
 
 For sell rules, quantity is the minimum sell size.
 
-For buy rules, quantity is the maximum buy size.
+For sell rules, limit caps the active sell order quantity. Leave it blank to keep selling the full available wallet balance.
+
+For buy rules, quantity is the maximum single active buy order size.
+
+For buy rules, limit caps target inventory. The bot sizes the active buy order so current inventory plus the active buy order does not exceed the limit. Leave it blank to use the quantity as before.
 
 The bot only fetches status/open-order data for assets with configured rules when asset-rule mode is used.
 

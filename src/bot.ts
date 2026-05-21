@@ -106,6 +106,7 @@ export type AssetRuleInput = {
   group?: string | null;
   side?: string | null;
   quantity?: string | number | null;
+  limit?: string | number | null;
   price?: string | number | null;
 };
 
@@ -114,6 +115,7 @@ export type AssetRuleConfig = {
   group: AssetRegistryGroup;
   side: AssetRuleSide;
   quantity: number;
+  limit: number | null;
   price: number;
 };
 
@@ -443,6 +445,7 @@ export function parseAssetRule(input: AssetRuleInput, index?: number): AssetRule
   const group = normalizeAssetRuleGroup(input.group, asset);
   const side = parseAssetRuleSide(input.side, label + '.side');
   const quantity = parseRuleQuantity(input.quantity, label + '.quantity');
+  const limit = parseOptionalRuleLimit(input.limit, label + '.limit');
   const price = parseRulePrice(input.price, label + '.price');
 
   return {
@@ -450,6 +453,7 @@ export function parseAssetRule(input: AssetRuleInput, index?: number): AssetRule
     group,
     side,
     quantity,
+    limit,
     price,
   };
 }
@@ -474,6 +478,25 @@ function parseRuleQuantity(value: string | number | null | undefined, fieldName:
 
   if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
     throw new Error(`${fieldName} must be a positive integer`);
+  }
+
+  return parsed;
+}
+
+function parseOptionalRuleLimit(value: string | number | null | undefined, fieldName: string): number | null {
+  if (value === null || typeof value === 'undefined' || String(value).trim() === '') {
+    return null;
+  }
+
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+
+  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+    throw new Error(`${fieldName} must be blank or a positive integer`);
   }
 
   return parsed;
@@ -1498,6 +1521,7 @@ export class GmMarketBot {
     minPrice: number,
     quoteMintOverride?: PublicKey,
     marketOrderSnapshot?: MarketOrderSnapshot,
+    limit?: number | null,
   ) {
     this.logger.info(`[${new Date().toISOString()}] Checking ${resource.name} sell market...`);
     const cancelledIds = new Set<string>();
@@ -1540,7 +1564,14 @@ export class GmMarketBot {
         return;
       }
 
-      const quantityToSell = Math.max(minSellQuantity, Math.floor(walletBalance));
+      const availableToSell = Math.floor(walletBalance);
+      const quantityToSell = Math.min(availableToSell, limit ?? availableToSell);
+      if (quantityToSell < minSellQuantity) {
+        this.logger.info(
+          `Available ${resource.name} sell quantity after limit is ${quantityToSell}, below minimum ${minSellQuantity}. Skipping.`,
+        );
+        return;
+      }
       this.logger.info(`Planning to sell ${quantityToSell} ${resource.name} this cycle.`);
       await this.placeOrder(resource, 'sell', targetPrice, quantityToSell, cancelledIds, quoteMint);
       const postPlacementBalance = await this.syncPostPlacementWalletBalance(resource, 'sell');
@@ -1550,14 +1581,25 @@ export class GmMarketBot {
 
     const activeQuantity = getOrderRemainingQuantity(activeOrder);
     const freeWalletQuantity = Math.max(0, Math.floor(walletBalance));
-    const shouldResizeForWallet = freeWalletQuantity >= minSellQuantity;
+    const remainingSellAllowance = Math.max(0, (limit ?? Number.POSITIVE_INFINITY) - activeQuantity);
+    const addableWalletQuantity = Math.min(freeWalletQuantity, remainingSellAllowance);
+    const shouldResizeForWallet = addableWalletQuantity >= minSellQuantity;
+    const shouldResizeForLimit = typeof limit === 'number' && activeQuantity > limit;
     const priceDelta = Math.abs(activeOrder.uiPrice - targetPrice);
     const shouldReplaceForPrice = priceDelta >= ORDER_PRICE_EPSILON;
 
-    if (shouldResizeForWallet || shouldReplaceForPrice) {
-      const nextQuantity = shouldResizeForWallet ? activeQuantity + freeWalletQuantity : activeQuantity;
+    if (shouldResizeForWallet || shouldResizeForLimit || shouldReplaceForPrice) {
+      const nextQuantity = shouldResizeForLimit
+        ? limit ?? activeQuantity
+        : shouldResizeForWallet
+          ? activeQuantity + addableWalletQuantity
+          : activeQuantity;
 
-      if (shouldResizeForWallet) {
+      if (shouldResizeForLimit) {
+        this.logger.info(
+          `Sell limit for ${resource.name} is ${limit}. Resizing order from ${activeQuantity} to ${nextQuantity}.`,
+        );
+      } else if (shouldResizeForWallet) {
         this.logger.info(
           `Sell free wallet balance for ${resource.name} is ${freeWalletQuantity}. Resizing order from ${activeQuantity} to ${nextQuantity}.`,
         );
@@ -1575,7 +1617,7 @@ export class GmMarketBot {
     }
 
     this.logger.info(
-      `Sell order ${activeOrder.id} already at target price (${activeOrder.uiPrice}) and free wallet balance (${freeWalletQuantity}) is below threshold. Nothing to do.`,
+      `Sell order ${activeOrder.id} already at target price (${activeOrder.uiPrice}) and free wallet balance (${freeWalletQuantity}) is below threshold or limit. Nothing to do.`,
     );
   }
 
@@ -1605,13 +1647,19 @@ export class GmMarketBot {
 
     const maxBuyQuantity = rule.quantity;
     const maxBuyPrice = rule.price;
-    const relevantBuyQuantity = getRelevantOrderThreshold(maxBuyQuantity, this.config.relevantBuyOrderPct);
-    const targetPrice = this.getTargetBuyPrice(
-      allOrders,
-      maxBuyPrice,
-      relevantBuyQuantity,
-      isShipMarket ? { outbidPct: SHIP_BUY_OUTBID_PCT } : undefined,
-    );
+    const inventoryBalance = await this.getWalletBalanceForMint(resource.mint, resource.name, { refresh: true });
+    const remainingBuyAllowance = Math.max(0, Math.floor((rule.limit ?? Number.POSITIVE_INFINITY) - inventoryBalance));
+    const targetQuantity = Math.min(maxBuyQuantity, remainingBuyAllowance);
+    const relevantBuyQuantity = getRelevantOrderThreshold(Math.max(1, targetQuantity), this.config.relevantBuyOrderPct);
+    const targetPrice =
+      targetQuantity > 0
+        ? this.getTargetBuyPrice(
+            allOrders,
+            maxBuyPrice,
+            relevantBuyQuantity,
+            isShipMarket ? { outbidPct: SHIP_BUY_OUTBID_PCT } : undefined,
+          )
+        : maxBuyPrice;
 
     const sortedMyOrders = [...myOrders].sort((a, b) => b.uiPrice - a.uiPrice);
     const activeOrder = sortedMyOrders[0];
@@ -1619,14 +1667,21 @@ export class GmMarketBot {
       await this.cancelOrder(sortedMyOrders[i], resource, 'buy', cancelledIds);
     }
 
-    const targetQuantity = maxBuyQuantity;
     const quoteBalance = await this.getWalletBalanceForMint(quoteMint, quoteSymbol);
     this.logger.info(`${quoteSymbol} balance: ${quoteBalance}`);
+    this.logger.info(`${resource.name} inventory balance: ${inventoryBalance}`);
     this.logger.info(
       `Planning to buy up to ${targetQuantity} ${resource.name} at max ${maxBuyPrice} ${quoteSymbol} (target ${targetPrice}).`,
     );
 
     if (!activeOrder) {
+      if (targetQuantity <= 0) {
+        this.logger.info(
+          `Buy limit reached for ${resource.name}. Inventory ${inventoryBalance} is at or above limit ${rule.limit}. Skipping.`,
+        );
+        return;
+      }
+
       const requiredQuote = targetQuantity * targetPrice;
       if (quoteBalance < requiredQuote) {
         this.logger.info(
@@ -1655,6 +1710,14 @@ export class GmMarketBot {
     const activeQuantity = getOrderRemainingQuantity(activeOrder);
     const priceDelta = Math.abs(activeOrder.uiPrice - targetPrice);
     const quantityChanged = activeQuantity !== targetQuantity;
+
+    if (targetQuantity <= 0) {
+      this.logger.info(
+        `Buy limit reached for ${resource.name}. Cancelling active buy order ${activeOrder.id} with remaining quantity ${activeQuantity}.`,
+      );
+      await this.cancelOrder(activeOrder, resource, 'buy', cancelledIds);
+      return;
+    }
 
     if (!quantityChanged && priceDelta < ORDER_PRICE_EPSILON) {
       this.logger.info(
@@ -1745,7 +1808,7 @@ export class GmMarketBot {
       });
     } else if (sellRules.length === 1) {
       const sellRule = sellRules[0];
-      await this.processSellRule(resource, sellRule.rule.quantity, sellRule.rule.price, quoteMint, marketOrderSnapshot);
+      await this.processSellRule(resource, sellRule.rule.quantity, sellRule.rule.price, quoteMint, marketOrderSnapshot, sellRule.rule.limit);
     }
 
     if (buyRules.length > 1) {

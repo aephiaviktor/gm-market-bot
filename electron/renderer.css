@@ -944,7 +944,7 @@ button:disabled {
 
 .rules-table.ships-rules-table th:nth-child(1),
 .rules-table.ships-rules-table td:nth-child(1) {
-  width: 36%;
+  width: 32%;
 }
 
 .rules-table.ships-rules-table th:nth-child(2),
@@ -959,11 +959,16 @@ button:disabled {
 
 .rules-table.ships-rules-table th:nth-child(4),
 .rules-table.ships-rules-table td:nth-child(4) {
-  width: 118px;
+  width: 112px;
 }
 
 .rules-table.ships-rules-table th:nth-child(5),
 .rules-table.ships-rules-table td:nth-child(5) {
+  width: 118px;
+}
+
+.rules-table.ships-rules-table th:nth-child(6),
+.rules-table.ships-rules-table td:nth-child(6) {
   width: 142px;
 }
 

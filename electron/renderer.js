@@ -274,6 +274,7 @@ function buildDefaultAssetRuleRows(group = null) {
       asset: resource.value,
       side: 'sell',
       quantity: '',
+      limit: '',
       price: '',
     })),
   );
@@ -307,6 +308,7 @@ function normalizeAssetRuleRows(rows) {
         asset,
         side: row?.side === 'buy' ? 'buy' : 'sell',
         quantity: String(row?.quantity ?? '').trim(),
+        limit: String(row?.limit ?? '').trim(),
         price: String(row?.price ?? '').trim(),
       };
     }
@@ -319,6 +321,7 @@ function normalizeAssetRuleRows(rows) {
       asset: fallbackAsset,
       side: row?.side === 'buy' ? 'buy' : 'sell',
       quantity: String(row?.quantity ?? '').trim(),
+      limit: String(row?.limit ?? '').trim(),
       price: String(row?.price ?? '').trim(),
     };
   });
@@ -326,9 +329,13 @@ function normalizeAssetRuleRows(rows) {
 
 function updateRuleHint(rowElement, side) {
   const quantityHint = rowElement.querySelector('[data-role="quantity-hint"]');
+  const limitHint = rowElement.querySelector('[data-role="limit-hint"]');
   const priceHint = rowElement.querySelector('[data-role="price-hint"]');
   if (quantityHint) {
     quantityHint.textContent = side === 'buy' ? 'Max buy quantity' : 'Min sell quantity';
+  }
+  if (limitHint) {
+    limitHint.textContent = side === 'buy' ? 'Max buy quantity' : 'Max sell quantity';
   }
   if (priceHint) {
     priceHint.textContent = side === 'buy' ? 'Max price' : 'Min price';
@@ -356,12 +363,12 @@ function renderAssetRuleRows() {
   addRuleRowBtn.disabled = options.length === 0;
 
   if (!allOptions.length) {
-    assetRulesBody.innerHTML = '<tr><td colspan="5" class="empty-state">Asset registry unavailable. Save a valid Aephia API Key in Setup to load the managed asset list.</td></tr>';
+    assetRulesBody.innerHTML = '<tr><td colspan="6" class="empty-state">Asset registry unavailable. Save a valid Aephia API Key in Setup to load the managed asset list.</td></tr>';
     return;
   }
 
   if (!options.length) {
-    assetRulesBody.innerHTML = '<tr><td colspan="5" class="empty-state">No assets available for this group.</td></tr>';
+    assetRulesBody.innerHTML = '<tr><td colspan="6" class="empty-state">No assets available for this group.</td></tr>';
     return;
   }
 
@@ -374,7 +381,7 @@ function renderAssetRuleRows() {
           : activeAssetRuleGroup === 'components'
             ? 'component'
             : 'raw material';
-    assetRulesBody.innerHTML = `<tr><td colspan="5" class="empty-state">No ${groupLabel} rules yet. Use + Add Row.</td></tr>`;
+    assetRulesBody.innerHTML = `<tr><td colspan="6" class="empty-state">No ${groupLabel} rules yet. Use + Add Row.</td></tr>`;
     return;
   }
 
@@ -398,6 +405,12 @@ function renderAssetRuleRows() {
       </td>
       <td>
         <div class="cell-stack">
+          <input data-index="${index}" data-field="limit" type="number" min="0" step="1" inputmode="numeric" />
+          <span class="cell-hint" data-role="limit-hint"></span>
+        </div>
+      </td>
+      <td>
+        <div class="cell-stack">
           <input data-index="${index}" data-field="price" type="number" min="0" step="0.000001" inputmode="decimal" />
           <span class="cell-hint" data-role="price-hint"></span>
         </div>
@@ -413,6 +426,7 @@ function renderAssetRuleRows() {
     const assetSelect = tr.querySelector('[data-field="asset"]');
     const sideSelect = tr.querySelector('[data-field="side"]');
     const quantityInput = tr.querySelector('[data-field="quantity"]');
+    const limitInput = tr.querySelector('[data-field="limit"]');
     const priceInput = tr.querySelector('[data-field="price"]');
     const cancelOrderBtn = tr.querySelector('.cancel-order-btn');
 
@@ -426,6 +440,7 @@ function renderAssetRuleRows() {
     assetSelect.value = options.some((option) => option.value === row.asset) ? row.asset : options[0].value;
     sideSelect.value = row.side === 'buy' ? 'buy' : 'sell';
     quantityInput.value = row.quantity ?? '';
+    limitInput.value = row.limit ?? '';
     priceInput.value = row.price ?? '';
     updateRuleHint(tr, sideSelect.value);
 
@@ -440,6 +455,10 @@ function renderAssetRuleRows() {
 
     quantityInput.addEventListener('input', (event) => {
       assetRuleRows[index].quantity = event.target.value;
+    });
+
+    limitInput.addEventListener('input', (event) => {
+      assetRuleRows[index].limit = event.target.value;
     });
 
     priceInput.addEventListener('input', (event) => {
@@ -923,6 +942,7 @@ function normalizeAssetRulesForDiff(rows) {
       asset: String(row?.asset ?? '').trim(),
       side: row?.side === 'buy' ? 'buy' : 'sell',
       quantity: String(row?.quantity ?? '').trim(),
+      limit: String(row?.limit ?? '').trim(),
       price: String(row?.price ?? '').trim(),
     }))
     .filter((row) => row.asset)
@@ -931,17 +951,17 @@ function normalizeAssetRulesForDiff(rows) {
 
 function getChangedAssets(previousRows, nextRows) {
   const prevMap = new Map(
-    normalizeAssetRulesForDiff(previousRows).map((row) => [`${row.group}|${row.asset}|${row.side}`, `${row.quantity}|${row.price}`])
+    normalizeAssetRulesForDiff(previousRows).map((row) => [`${row.group}|${row.asset}|${row.side}`, `${row.quantity}|${row.limit}|${row.price}`])
   );
   const nextMap = new Map(
-    normalizeAssetRulesForDiff(nextRows).map((row) => [`${row.group}|${row.asset}|${row.side}`, `${row.quantity}|${row.price}`])
+    normalizeAssetRulesForDiff(nextRows).map((row) => [`${row.group}|${row.asset}|${row.side}`, `${row.quantity}|${row.limit}|${row.price}`])
   );
 
   const touched = new Set();
   const keys = new Set([...prevMap.keys(), ...nextMap.keys()]);
   for (const key of keys) {
     if (prevMap.get(key) !== nextMap.get(key)) {
-      touched.add(key.split('|')[0]);
+      touched.add(key.split('|')[1]);
     }
   }
   return Array.from(touched);
@@ -1096,6 +1116,7 @@ addRuleRowBtn.addEventListener('click', () => {
     asset: firstOption.value,
     side: 'sell',
     quantity: '',
+    limit: '',
     price: '',
   });
   renderAssetRuleRows();
