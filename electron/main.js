@@ -20,7 +20,8 @@ const recentLogs = [];
 const AEPHIA_TOKEN_VALIDATE_URL = 'https://api.aephia.com/token/validate';
 const AEPHIA_API_KEY_VALIDATION_BYPASS = false; // Re-enable Aephia token validation.
 const GITHUB_REPO = 'aephiaviktor/gm-market-bot';
-const GITHUB_TAGS_URL = `https://api.github.com/repos/${GITHUB_REPO}/tags`;
+const GITHUB_MAIN_PACKAGE_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/package.json`;
+const GITHUB_MAIN_ARCHIVE_URL = `https://github.com/${GITHUB_REPO}/archive/refs/heads/main.tar.gz`;
 const APP_DISPLAY_NAME = 'GM Market Bot';
 
 function installApplicationMenu() {
@@ -99,22 +100,18 @@ async function fetchGithubJson(url) {
 }
 
 async function getLatestGithubVersion() {
-  const tags = await fetchGithubJson(GITHUB_TAGS_URL);
-  const versions = (Array.isArray(tags) ? tags : [])
-    .map((tag) => String(tag?.name || '').trim())
-    .filter((name) => /^v?\d+\.\d+\.\d+/.test(name))
-    .sort((a, b) => compareVersions(b, a));
+  const remotePackage = await fetchGithubJson(GITHUB_MAIN_PACKAGE_URL);
+  const version = normalizeVersion(remotePackage?.version);
 
-  if (!versions.length) {
-    throw new Error('No version tags found on GitHub.');
+  if (!version) {
+    throw new Error('No package version found on GitHub main.');
   }
 
-  const tag = versions[0];
   return {
-    tag,
-    version: normalizeVersion(tag),
-    url: `https://github.com/${GITHUB_REPO}/releases/tag/${tag}`,
-    tarballUrl: `https://github.com/${GITHUB_REPO}/archive/refs/tags/${tag}.tar.gz`,
+    version,
+    branch: 'main',
+    url: `https://github.com/${GITHUB_REPO}/tree/main`,
+    tarballUrl: GITHUB_MAIN_ARCHIVE_URL,
   };
 }
 
@@ -124,7 +121,7 @@ async function checkForUpdates() {
   return {
     currentVersion,
     latestVersion: latest.version,
-    latestTag: latest.tag,
+    latestBranch: latest.branch,
     updateAvailable: compareVersions(latest.version, currentVersion) > 0,
     releaseUrl: latest.url,
   };
@@ -179,7 +176,7 @@ async function downloadUpdateAndRestart() {
   }
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gm-market-bot-update-'));
-  const archivePath = path.join(tempDir, `${latest.tag}.tar.gz`);
+  const archivePath = path.join(tempDir, `${latest.branch || 'main'}.tar.gz`);
   await downloadFile(latest.tarballUrl, archivePath);
   await runCommand('tar', ['-xzf', archivePath, '-C', tempDir], { cwd: tempDir });
 
