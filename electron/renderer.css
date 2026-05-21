@@ -635,21 +635,21 @@ h3 {
 .rules-table td:nth-child(3),
 .rules-table th:nth-child(4),
 .rules-table td:nth-child(4) {
-  width: 112px;
+  width: 134px;
 }
 
 .rules-table th:nth-child(5),
 .rules-table td:nth-child(5) {
-  width: 118px;
+  width: 142px;
 }
 
 .rules-table td:nth-child(3) .cell-stack,
 .rules-table td:nth-child(4) .cell-stack {
-  min-width: 102px;
+  min-width: 122px;
 }
 
 .rules-table td:nth-child(5) .cell-stack {
-  min-width: 108px;
+  min-width: 130px;
 }
 
 .rules-table td:nth-child(3) input,
@@ -973,17 +973,17 @@ button:disabled {
 
 .rules-table.ships-rules-table th:nth-child(3),
 .rules-table.ships-rules-table td:nth-child(3) {
-  width: 112px;
+  width: 134px;
 }
 
 .rules-table.ships-rules-table th:nth-child(4),
 .rules-table.ships-rules-table td:nth-child(4) {
-  width: 112px;
+  width: 134px;
 }
 
 .rules-table.ships-rules-table th:nth-child(5),
 .rules-table.ships-rules-table td:nth-child(5) {
-  width: 118px;
+  width: 142px;
 }
 
 .rules-table.ships-rules-table th:nth-child(6),
