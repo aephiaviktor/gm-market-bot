@@ -1583,7 +1583,11 @@ export class GmMarketBot {
     const freeWalletQuantity = Math.max(0, Math.floor(walletBalance));
     const remainingSellAllowance = Math.max(0, (limit ?? Number.POSITIVE_INFINITY) - activeQuantity);
     const addableWalletQuantity = Math.min(freeWalletQuantity, remainingSellAllowance);
-    const shouldResizeForWallet = addableWalletQuantity >= minSellQuantity;
+    const canTopUpToSellLimit =
+      typeof limit === 'number' &&
+      remainingSellAllowance > 0 &&
+      freeWalletQuantity >= remainingSellAllowance;
+    const shouldResizeForWallet = addableWalletQuantity >= minSellQuantity || canTopUpToSellLimit;
     const shouldResizeForLimit = typeof limit === 'number' && activeQuantity > limit;
     const priceDelta = Math.abs(activeOrder.uiPrice - targetPrice);
     const shouldReplaceForPrice = priceDelta >= ORDER_PRICE_EPSILON;
@@ -1601,7 +1605,9 @@ export class GmMarketBot {
         );
       } else if (shouldResizeForWallet) {
         this.logger.info(
-          `Sell free wallet balance for ${resource.name} is ${freeWalletQuantity}. Resizing order from ${activeQuantity} to ${nextQuantity}.`,
+          canTopUpToSellLimit
+            ? `Sell free wallet balance for ${resource.name} is ${freeWalletQuantity}. Topping up order from ${activeQuantity} to sell limit ${nextQuantity}.`
+            : `Sell free wallet balance for ${resource.name} is ${freeWalletQuantity}. Resizing order from ${activeQuantity} to ${nextQuantity}.`,
         );
       } else {
         this.logger.info(
