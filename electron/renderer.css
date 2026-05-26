@@ -698,6 +698,10 @@ h3 {
   gap: 10px;
 }
 
+.config-wide {
+  grid-column: 1 / -1;
+}
+
 .setup-logs-panel {
   margin-top: 16px;
 }
