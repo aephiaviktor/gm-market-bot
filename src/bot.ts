@@ -26,6 +26,7 @@ const STATUS_SNAPSHOT_CACHE_CEIL_MS = 300000;
 const DEFAULT_RPC_REQUESTS_PER_SECOND = 10;
 const DEFAULT_RPC_TX_SEND_RATE_LIMIT_PER_SECOND = 1;
 const DEFAULT_CHAIN_STATUS_REFRESH_INTERVAL_MINUTES = 5;
+const RPC_RATE_LIMIT_RETRY_DELAYS_MS = [2000, 5000, 10000];
 const SHIP_BUY_OUTBID_PCT = 0.005;
 const SHIP_PART_SUFFIX = ' (ship parts)';
 const SHIP_START_NAME = 'Busan Pulse';
@@ -63,6 +64,51 @@ class RpcRequestRateLimiter {
   }
 }
 
+function getErrorText(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name} ${error.message}`.trim();
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function isRpcRateLimitError(error: unknown): boolean {
+  const text = getErrorText(error).toLowerCase();
+  return text.includes('429') || text.includes('too many requests') || text.includes('rate limit');
+}
+
+async function callRpcWithRateLimitRetry<T>(
+  label: string,
+  invoke: () => Promise<T>,
+  limiter: RpcRequestRateLimiter,
+  logger: BotLogger,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await limiter.wait();
+      return await invoke();
+    } catch (error) {
+      const retryDelayMs = RPC_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      if (!isRpcRateLimitError(error) || retryDelayMs === undefined) {
+        throw error;
+      }
+
+      logger.warn(
+        `RPC rate limit for ${label}; retrying in ${retryDelayMs}ms (${attempt + 1}/${RPC_RATE_LIMIT_RETRY_DELAYS_MS.length}).`,
+      );
+      await sleep(retryDelayMs);
+    }
+  }
+}
+
 function createFailoverConnection(
   primaryUrl: string,
   fallbackUrl: string | undefined,
@@ -84,15 +130,23 @@ function createFailoverConnection(
 
       return async (...args: unknown[]) => {
         try {
-          await limiter.wait();
-          return await primaryValue.apply(target, args);
+          return await callRpcWithRateLimitRetry(
+            `Connection.${String(prop)}()`,
+            () => primaryValue.apply(target, args),
+            limiter,
+            logger,
+          );
         } catch (error) {
           if (!fallback || typeof fallbackValue !== 'function') {
             throw error;
           }
           logger.warn(`Primary RPC failed for Connection.${String(prop)}(), trying fallback RPC.`, error);
-          await limiter.wait();
-          return await fallbackValue.apply(fallback, args);
+          return await callRpcWithRateLimitRetry(
+            `fallback Connection.${String(prop)}()`,
+            () => fallbackValue.apply(fallback, args),
+            limiter,
+            logger,
+          );
         }
       };
     },
