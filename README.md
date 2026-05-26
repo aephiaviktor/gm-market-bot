@@ -68,9 +68,9 @@ npm run build
 npm run typecheck
 ```
 
-## Setup Fields
+## Settings Fields
 
-Configure the bot from the app's Setup screen.
+Configure the bot from the app's Settings screen.
 
 Sensitive fields:
 

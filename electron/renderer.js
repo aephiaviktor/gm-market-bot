@@ -190,7 +190,7 @@ function setActiveTab(tabName) {
     button.classList.toggle('active', nextTab === 'setup');
     button.setAttribute('aria-selected', String(nextTab === 'setup'));
     if (button.id === 'tab-setup') {
-      button.textContent = nextTab === 'setup' ? 'Asset Rules' : 'Setup';
+      button.textContent = nextTab === 'setup' ? 'Asset Rules' : 'Settings';
       button.dataset.tab = nextTab === 'setup' ? 'asset-rules' : 'setup';
     }
   }
@@ -363,7 +363,7 @@ function renderAssetRuleRows() {
   addRuleRowBtn.disabled = options.length === 0;
 
   if (!allOptions.length) {
-    assetRulesBody.innerHTML = '<tr><td colspan="6" class="empty-state">Asset registry unavailable. Save a valid Aephia API Key in Setup to load the managed asset list.</td></tr>';
+    assetRulesBody.innerHTML = '<tr><td colspan="6" class="empty-state">Asset registry unavailable. Save a valid Aephia API Key in Settings to load the managed asset list.</td></tr>';
     return;
   }
 
