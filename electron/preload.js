@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('botApi', {
   saveSettings: (config) => ipcRenderer.invoke('settings:save', config),
   startBot: () => ipcRenderer.invoke('bot:start'),
   stopBot: () => ipcRenderer.invoke('bot:stop'),
+  applyRunningSettings: (payload) => ipcRenderer.invoke('bot:apply-running-settings', payload),
   cancelOrder: (payload) => ipcRenderer.invoke('bot:cancel-order', payload),
   getBotStatus: () => ipcRenderer.invoke('bot:status'),
   rerunAssets: (assets) => ipcRenderer.invoke('bot:rerun-assets', assets),

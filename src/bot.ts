@@ -881,10 +881,10 @@ function normalizeAssetRuleGroup(value: string | null | undefined, asset: string
 }
 
 export class GmMarketBot {
-  private readonly legacyResources: ResourceConfig[];
-  private readonly trackedResources: ResourceConfig[];
-  private readonly resourceListResources: ResourceConfig[];
-  private readonly statusResources: ResourceConfig[];
+  private legacyResources: ResourceConfig[];
+  private trackedResources: ResourceConfig[];
+  private resourceListResources: ResourceConfig[];
+  private statusResources: ResourceConfig[];
   private readonly connection: Connection;
   private readonly wallet: Keypair;
   private readonly gm = new GmClientService();
@@ -948,7 +948,16 @@ export class GmMarketBot {
     this.config.analysisDir = next.analysisDir;
     this.config.assetRules = next.assetRules;
 
+    this.resourceListResources = parseResources(this.config.resourceList);
+    this.legacyResources = this.config.assetRules.length > 0 ? [] : this.resourceListResources;
+    this.trackedResources = this.config.assetRules.length > 0 ? parseRuleResources(this.config.assetRules) : this.legacyResources;
+    this.statusResources = this.config.assetRules.length > 0 ? this.trackedResources : this.resourceListResources;
     this.checkIntervalMs = this.config.checkIntervalMinutes * 60 * 1000;
+    this.passiveOpenOrdersCache.clear();
+    this.marketLeaderCache.clear();
+    this.walletBalanceCache.clear();
+    this.solBalanceCache = null;
+    this.invalidateStatusSnapshotCache();
   }
 
   private invalidateMarketLeaderCacheForMint(mint: string) {

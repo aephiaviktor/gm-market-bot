@@ -435,6 +435,58 @@ async function stopBot() {
   broadcast('bot-status', { running: false });
 }
 
+async function applyRunningSettingsToBot() {
+  if (!bot || !botRunning) {
+    return null;
+  }
+
+  const configInput = await getEffectiveBotInputConfig({ requireAssetRegistry: true });
+  const newConfig = buildBotConfig(configInput);
+
+  if (typeof bot.applyConfigUpdates === 'function') {
+    bot.applyConfigUpdates(newConfig);
+  } else if (bot.config && typeof bot.config === 'object') {
+    Object.assign(bot.config, newConfig);
+  }
+
+  return newConfig;
+}
+
+async function rerunAssetGroups(newConfig, assets) {
+  if (!bot || !botRunning) {
+    return { ok: false, status: 'bot_not_running' };
+  }
+
+  const requestedAssets = Array.isArray(assets)
+    ? assets.map((asset) => String(asset || '').trim()).filter(Boolean)
+    : [];
+
+  if (!requestedAssets.length) {
+    return { ok: false, status: 'no_assets' };
+  }
+
+  const requestedKeys = new Set(requestedAssets.map((asset) => asset.toLowerCase()));
+  const grouped = new Map();
+  newConfig.assetRules.forEach((rule, index) => {
+    const bucket = grouped.get(rule.asset) || [];
+    bucket.push({ index, rule });
+    grouped.set(rule.asset, bucket);
+  });
+
+  for (const [asset, rules] of grouped.entries()) {
+    if (!requestedKeys.has(String(asset).toLowerCase())) {
+      continue;
+    }
+    await bot.processAssetRuleGroup({ asset, rules });
+  }
+
+  if (typeof bot.invalidateStatusSnapshotCache === 'function') {
+    bot.invalidateStatusSnapshotCache();
+  }
+
+  return { ok: true, status: 'rerun_triggered', assets: requestedAssets };
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1460,
@@ -483,6 +535,23 @@ ipcMain.handle('bot:stop', async () => {
   return { running: botRunning };
 });
 
+ipcMain.handle('bot:apply-running-settings', async (_event, payload) => {
+  if (!bot || !botRunning) {
+    return { ok: false, status: 'bot_not_running' };
+  }
+
+  const newConfig = await applyRunningSettingsToBot();
+  const requestedAssets = Array.isArray(payload?.assets)
+    ? payload.assets.map((asset) => String(asset || '').trim()).filter(Boolean)
+    : [];
+
+  if (!requestedAssets.length) {
+    return { ok: true, status: 'config_applied', assets: [] };
+  }
+
+  return rerunAssetGroups(newConfig, requestedAssets);
+});
+
 ipcMain.handle('bot:cancel-order', async (_event, payload) => {
   const asset = String(payload?.asset ?? '').trim();
   const side = payload?.side === 'buy' ? 'buy' : 'sell';
@@ -516,44 +585,8 @@ ipcMain.handle('bot:rerun-assets', async (_event, assets) => {
     return { ok: false, status: 'bot_not_running' };
   }
 
-  const requestedAssets = Array.isArray(assets)
-    ? assets.map((asset) => String(asset || '').trim()).filter(Boolean)
-    : [];
-
-  if (!requestedAssets.length) {
-    return { ok: false, status: 'no_assets' };
-  }
-
-  const configInput = await getEffectiveBotInputConfig({ requireAssetRegistry: true });
-  const newConfig = buildBotConfig(configInput);
-
-  if (typeof bot.applyConfigUpdates === 'function') {
-    bot.applyConfigUpdates(newConfig);
-  } else if (bot.config && typeof bot.config === 'object') {
-    Object.assign(bot.config, newConfig);
-  }
-
-  const grouped = new Map();
-  newConfig.assetRules.forEach((rule, index) => {
-    const bucket = grouped.get(rule.asset) || [];
-    bucket.push({ index, rule });
-    grouped.set(rule.asset, bucket);
-  });
-
-  for (const asset of requestedAssets) {
-    const rules = grouped.get(asset);
-    if (!rules || !rules.length) {
-      continue;
-    }
-
-    await bot.processAssetRuleGroup({ asset, rules });
-  }
-
-  if (typeof bot.invalidateStatusSnapshotCache === 'function') {
-    bot.invalidateStatusSnapshotCache();
-  }
-
-  return { ok: true, status: 'rerun_triggered', assets: requestedAssets };
+  const newConfig = await applyRunningSettingsToBot();
+  return rerunAssetGroups(newConfig, assets);
 });
 
 ipcMain.handle('bot:status', async () => {

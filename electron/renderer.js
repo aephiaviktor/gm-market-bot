@@ -12,7 +12,20 @@ const fields = [
 
 const STATUS_POLL_MS = 60000;
 const AUTO_RERUN_COOLDOWN_MS = 120000;
-const APP_VERSION = '0.1.26';
+const APP_VERSION = '0.1.27';
+const FULL_RESTART_CONFIG_KEYS = new Set([
+  'AEPHIA_API_KEY',
+  'RPC_URL',
+  'RPC_URL_FALLBACK',
+  'HOT_WALLET_SECRET',
+  'RESOURCE_LIST',
+]);
+const RERUN_ALL_ASSETS_CONFIG_KEYS = new Set([
+  'MIN_SELL_QUANTITY',
+  'MIN_PRICE',
+  'RELEVANT_SELL_ORDER_PCT',
+  'RELEVANT_BUY_ORDER_PCT',
+]);
 
 const form = document.getElementById('config-form');
 const logsEl = document.getElementById('logs');
@@ -967,6 +980,32 @@ function getChangedAssets(previousRows, nextRows) {
   return Array.from(touched);
 }
 
+function getChangedConfigKeys(previousConfig, nextConfig) {
+  const keys = new Set([
+    ...Object.keys(previousConfig || {}),
+    ...Object.keys(nextConfig || {}),
+  ]);
+  const changed = [];
+
+  for (const key of keys) {
+    if (String(previousConfig?.[key] ?? '') !== String(nextConfig?.[key] ?? '')) {
+      changed.push(key);
+    }
+  }
+
+  return changed;
+}
+
+function getConfiguredAssets(rows) {
+  return Array.from(
+    new Set(
+      normalizeAssetRulesForDiff(rows)
+        .map((row) => row.asset)
+        .filter(Boolean)
+    )
+  );
+}
+
 async function saveAllSettings() {
   const payload = {
     config: readFormConfig(),
@@ -1033,25 +1072,37 @@ saveBtn.addEventListener('click', async () => {
   const currentConfig = { ...(result?.config || readFormConfig()) };
   const currentRules = normalizeAssetRulesForDiff(assetRuleRows);
 
-  const configChanged = JSON.stringify(previousConfig) !== JSON.stringify(currentConfig);
+  const changedConfigKeys = getChangedConfigKeys(previousConfig, currentConfig);
+  const needsRestart = changedConfigKeys.some((key) => FULL_RESTART_CONFIG_KEYS.has(key));
+  const rerunAllAssets = changedConfigKeys.some((key) => RERUN_ALL_ASSETS_CONFIG_KEYS.has(key));
   const changedAssets = getChangedAssets(previousRules, currentRules);
 
   const wasRunning = startBtn.disabled;
   if (wasRunning) {
-    if (!configChanged && changedAssets.length > 0) {
-      appendLog(
-        `[${new Date().toISOString()}] [INFO] Applying settings for changed assets only: ${changedAssets.join(', ')}`
-      );
-      const rerun = await window.botApi.rerunAssets(changedAssets);
-      if (!rerun?.ok) {
-        appendLog(`[${new Date().toISOString()}] [WARN] Asset-only rerun failed; falling back to restart.`);
-        await window.botApi.stopBot();
-        await window.botApi.startBot();
-      }
-    } else {
+    if (needsRestart) {
       appendLog(`[${new Date().toISOString()}] [INFO] Restarting bot to apply settings immediately...`);
       await window.botApi.stopBot();
       await window.botApi.startBot();
+    } else {
+      const assetsToRerun = rerunAllAssets ? getConfiguredAssets(currentRules) : changedAssets;
+      const changedConfigLabel = changedConfigKeys.length ? changedConfigKeys.join(', ') : 'none';
+
+      if (assetsToRerun.length > 0) {
+        appendLog(
+          `[${new Date().toISOString()}] [INFO] Applying settings without full restart; rerunning assets: ${assetsToRerun.join(', ')}`
+        );
+      } else {
+        appendLog(
+          `[${new Date().toISOString()}] [INFO] Applying settings without full restart; changed config: ${changedConfigLabel}`
+        );
+      }
+
+      const applied = await window.botApi.applyRunningSettings({ assets: assetsToRerun });
+      if (!applied?.ok) {
+        appendLog(`[${new Date().toISOString()}] [WARN] Running settings apply failed; falling back to restart.`);
+        await window.botApi.stopBot();
+        await window.botApi.startBot();
+      }
     }
   }
 
