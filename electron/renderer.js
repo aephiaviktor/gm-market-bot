@@ -12,7 +12,7 @@ const fields = [
 
 const STATUS_POLL_MS = 60000;
 const AUTO_RERUN_COOLDOWN_MS = 120000;
-const APP_VERSION = '0.1.31';
+const APP_VERSION = '0.1.32';
 const FULL_RESTART_CONFIG_KEYS = new Set([
   'AEPHIA_API_KEY',
   'RPC_URL',
@@ -87,6 +87,7 @@ const SHIP_START = 'Busan Pulse';
 const SHIP_END = 'Rainbow Phi';
 const SHIP_PARTS_START = 'Fimbul Airbike (ship parts)';
 const SHIP_PARTS_END = 'Rainbow Phi (ship parts)';
+const ASSET_RULE_GROUP_ORDER = ['raw', 'components', 'ships', 'ship-parts'];
 const ASSET_RULE_GROUPS = new Set(['raw', 'components', 'ships', 'ship-parts']);
 
 function setRunning(running) {
@@ -605,13 +606,27 @@ function setListCount(element, count) {
 }
 
 function getAssetRuleOrderMap() {
+  // Rank by tab first, then by the row order shown inside that tab.
   const orderMap = new Map();
-  assetRuleRows.forEach((row, index) => {
-    const asset = String(row?.asset || '').split(':')[0]?.trim();
-    if (asset && !orderMap.has(asset)) {
-      orderMap.set(asset, index);
+  let counter = 0;
+
+  for (const group of ASSET_RULE_GROUP_ORDER) {
+    const rowsForGroup = assetRuleRows.filter((row) => getAssetRuleGroupForRow(row) === group);
+    for (const row of rowsForGroup) {
+      const asset = String(row?.asset || '').split(':')[0]?.trim();
+      if (asset && !orderMap.has(asset)) {
+        orderMap.set(asset, counter++);
+      }
     }
-  });
+
+    for (const option of getResourceOptions(group)) {
+      const asset = option.label;
+      if (asset && !orderMap.has(asset)) {
+        orderMap.set(asset, counter++);
+      }
+    }
+  }
+
   return orderMap;
 }
 
