@@ -73,51 +73,53 @@
               <section class="tab-panel" data-panel="setup" role="tabpanel" aria-labelledby="tab-setup">
                 <div class="panel-toolbar">
                   <h2>Settings</h2>
-                  <button id="toggle-sensitive-btn" type="button">Show Sensitive Fields</button>
+                  <button id="toggle-sensitive-btn" class="sensitive-toggle" type="button">Show Sensitive Fields</button>
                 </div>
 
-                <div class="config-grid">
-                  <label>
-                    Aephia API Key
-                    <input class="sensitive-field" name="AEPHIA_API_KEY" type="text" autocomplete="off" />
-                  </label>
-                  <label>
-                    RPC URL
-                    <input class="sensitive-field" name="RPC_URL" type="text" autocomplete="off" />
-                  </label>
-                  <label class="config-wide">
-                    Hot Wallet Secret
-                    <textarea class="sensitive-field" name="HOT_WALLET_SECRET" rows="3"></textarea>
-                  </label>
-                  <label>
-                    Requests / sec (Helius free plan is limited to 10 Requests / sec)
-                    <input name="RPC_REQUESTS_PER_SECOND" type="text" autocomplete="off" />
-                  </label>
-                  <label>
-                    sendTransaction / sec (Helius free plan is limited to 1 txs/sec)
-                    <input name="RPC_TX_SEND_RATE_LIMIT_PER_SECOND" type="text" autocomplete="off" />
-                  </label>
-                  <label>
-                    Chain status refresh interval minutes
-                    <input name="CHAIN_STATUS_REFRESH_INTERVAL_MINUTES" type="text" autocomplete="off" />
-                  </label>
-                  <label>
-                    Cycle Interval Minutes
-                    <input name="CHECK_INTERVAL_MINUTES" type="text" autocomplete="off" />
-                  </label>
-                  <label>
-                    Relevant Buy Order %
-                    <input name="RELEVANT_BUY_ORDER_PCT" type="text" autocomplete="off" />
-                  </label>
-                  <label>
-                    Relevant Sell Order %
-                    <input name="RELEVANT_SELL_ORDER_PCT" type="text" autocomplete="off" />
-                  </label>
-                </div>
+                <div class="setup-scroll">
+                  <div class="config-grid">
+                    <label>
+                      Aephia API Key
+                      <input class="sensitive-field" name="AEPHIA_API_KEY" type="text" autocomplete="off" />
+                    </label>
+                    <label>
+                      RPC URL
+                      <input class="sensitive-field" name="RPC_URL" type="text" autocomplete="off" />
+                    </label>
+                    <label class="config-wide">
+                      Hot Wallet Secret
+                      <textarea class="sensitive-field" name="HOT_WALLET_SECRET" rows="3"></textarea>
+                    </label>
+                    <label>
+                      Requests / sec (Helius free plan is limited to 10 Requests / sec)
+                      <input name="RPC_REQUESTS_PER_SECOND" type="text" autocomplete="off" />
+                    </label>
+                    <label>
+                      sendTransaction / sec (Helius free plan is limited to 1 txs/sec)
+                      <input name="RPC_TX_SEND_RATE_LIMIT_PER_SECOND" type="text" autocomplete="off" />
+                    </label>
+                    <label>
+                      Chain status refresh interval minutes
+                      <input name="CHAIN_STATUS_REFRESH_INTERVAL_MINUTES" type="text" autocomplete="off" />
+                    </label>
+                    <label>
+                      Cycle Interval Minutes
+                      <input name="CHECK_INTERVAL_MINUTES" type="text" autocomplete="off" />
+                    </label>
+                    <label>
+                      Relevant Buy Order %
+                      <input name="RELEVANT_BUY_ORDER_PCT" type="text" autocomplete="off" />
+                    </label>
+                    <label>
+                      Relevant Sell Order %
+                      <input name="RELEVANT_SELL_ORDER_PCT" type="text" autocomplete="off" />
+                    </label>
+                  </div>
 
-                <div class="panel setup-logs-panel">
-                  <h2>Logs</h2>
-                  <pre id="logs"></pre>
+                  <div class="panel setup-logs-panel">
+                    <h2>Logs</h2>
+                    <pre id="logs"></pre>
+                  </div>
                 </div>
               </section>
             </form>
