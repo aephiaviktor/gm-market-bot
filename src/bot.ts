@@ -151,8 +151,9 @@ function createFailoverConnection(
   getRequestsPerSecond: () => number,
   useSharedLimiter: () => boolean,
 ): Connection {
-  const primary = new Connection(primaryUrl, { commitment: 'confirmed' });
-  const fallback = fallbackUrl && fallbackUrl !== primaryUrl ? new Connection(fallbackUrl, { commitment: 'confirmed' }) : null;
+  const connectionConfig = { commitment: 'confirmed' as const, disableRetryOnRateLimit: true };
+  const primary = new Connection(primaryUrl, connectionConfig);
+  const fallback = fallbackUrl && fallbackUrl !== primaryUrl ? new Connection(fallbackUrl, connectionConfig) : null;
   const limiter = new RpcRequestRateLimiter(getRequestsPerSecond, logger, useSharedLimiter, 'GM Market Bot');
 
   return new Proxy(primary, {
