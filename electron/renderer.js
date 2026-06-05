@@ -543,11 +543,18 @@ function writeFormConfig(config) {
       }
     }
   }
+  updateRpcLimiterModeTone();
 }
 
 function parseBoolean(value) {
   const normalized = String(value ?? '').trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function updateRpcLimiterModeTone() {
+  const useRpcLimiter = parseBoolean(form.elements.namedItem('USE_RPC_LIMITER')?.checked ? 'true' : 'false');
+  form.classList.toggle('rpc-limiter-enabled', useRpcLimiter);
+  form.classList.toggle('rpc-limiter-disabled', !useRpcLimiter);
 }
 
 function renderRpcLimiterStatus(status) {
@@ -1181,6 +1188,8 @@ sendRpcLimiterBtn.addEventListener('click', async () => {
     sendRpcLimiterBtn.disabled = false;
   }
 });
+
+form.elements.namedItem('USE_RPC_LIMITER')?.addEventListener('change', updateRpcLimiterModeTone);
 
 startBtn.addEventListener('click', async () => {
   const result = await saveAllSettings();
