@@ -2,6 +2,7 @@ import { Buffer } from 'buffer';
 import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import { GmClientService, Order, OrderSide } from '@staratlas/factory';
 import { getAssociatedTokenAddress } from '@solana/spl-token';
+import { RpcLimiter } from 'rpc_limiter';
 import bs58 from 'bs58';
 import fs from 'fs/promises';
 import path from 'path';
@@ -27,6 +28,7 @@ const DEFAULT_RPC_REQUESTS_PER_SECOND = 10;
 const DEFAULT_RPC_TX_SEND_RATE_LIMIT_PER_SECOND = 1;
 const DEFAULT_CHAIN_STATUS_REFRESH_INTERVAL_MINUTES = 5;
 const RPC_RATE_LIMIT_RETRY_DELAYS_MS = [2000, 5000, 10000];
+const RPC_LIMITER_SLOW_WAIT_LOG_MS = 100;
 const SHIP_BUY_OUTBID_PCT = 0.005;
 const SHIP_PART_SUFFIX = ' (ship parts)';
 const SHIP_START_NAME = 'Busan Pulse';
@@ -42,10 +44,21 @@ const SHIP_MINTS = new Set(
 class RpcRequestRateLimiter {
   private queue: Promise<void> = Promise.resolve();
   private nextRequestAtMs = 0;
+  private readonly sharedLimiter = new RpcLimiter();
 
-  constructor(private readonly getRequestsPerSecond: () => number) {}
+  constructor(
+    private readonly getRequestsPerSecond: () => number,
+    private readonly logger: BotLogger,
+  ) {}
 
-  async wait(): Promise<void> {
+  async wait(label: string, bucketName: 'rpc:shared' | 'tx:shared' = 'rpc:shared'): Promise<void> {
+    const sharedStartedAt = Date.now();
+    await this.sharedLimiter.wait(bucketName, { label });
+    const sharedWaitMs = Date.now() - sharedStartedAt;
+    if (sharedWaitMs > RPC_LIMITER_SLOW_WAIT_LOG_MS) {
+      this.logger.info(`RPC limiter ${bucketName}: waited ${sharedWaitMs}ms for ${label}.`);
+    }
+
     const next = this.queue.then(async () => {
       const requestsPerSecond = Math.max(0.000001, this.getRequestsPerSecond());
       const waitMs = Math.max(0, this.nextRequestAtMs - Date.now());
@@ -90,10 +103,11 @@ async function callRpcWithRateLimitRetry<T>(
   invoke: () => Promise<T>,
   limiter: RpcRequestRateLimiter,
   logger: BotLogger,
+  bucketName: 'rpc:shared' | 'tx:shared' = 'rpc:shared',
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
-      await limiter.wait();
+      await limiter.wait(label, bucketName);
       return await invoke();
     } catch (error) {
       const retryDelayMs = RPC_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
@@ -117,7 +131,7 @@ function createFailoverConnection(
 ): Connection {
   const primary = new Connection(primaryUrl, { commitment: 'confirmed' });
   const fallback = fallbackUrl && fallbackUrl !== primaryUrl ? new Connection(fallbackUrl, { commitment: 'confirmed' }) : null;
-  const limiter = new RpcRequestRateLimiter(getRequestsPerSecond);
+  const limiter = new RpcRequestRateLimiter(getRequestsPerSecond, logger);
 
   return new Proxy(primary, {
     get(target, prop, receiver) {
@@ -129,12 +143,15 @@ function createFailoverConnection(
       const fallbackValue = fallback ? Reflect.get(fallback, prop, fallback) : null;
 
       return async (...args: unknown[]) => {
+        const label = `Connection.${String(prop)}()`;
+        const bucketName = prop === 'sendRawTransaction' ? 'tx:shared' : 'rpc:shared';
         try {
           return await callRpcWithRateLimitRetry(
-            `Connection.${String(prop)}()`,
+            label,
             () => primaryValue.apply(target, args),
             limiter,
             logger,
+            bucketName,
           );
         } catch (error) {
           if (!fallback || typeof fallbackValue !== 'function') {
@@ -146,6 +163,7 @@ function createFailoverConnection(
             () => fallbackValue.apply(fallback, args),
             limiter,
             logger,
+            bucketName,
           );
         }
       };
