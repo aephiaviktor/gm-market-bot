@@ -4,6 +4,7 @@ const fields = [
   'HOT_WALLET_SECRET',
   'RPC_REQUESTS_PER_SECOND',
   'RPC_TX_SEND_RATE_LIMIT_PER_SECOND',
+  'USE_RPC_LIMITER',
   'CHAIN_STATUS_REFRESH_INTERVAL_MINUTES',
   'CHECK_INTERVAL_MINUTES',
   'RELEVANT_BUY_ORDER_PCT',
@@ -17,6 +18,7 @@ const FULL_RESTART_CONFIG_KEYS = new Set([
   'AEPHIA_API_KEY',
   'RPC_URL',
   'RPC_URL_FALLBACK',
+  'USE_RPC_LIMITER',
   'HOT_WALLET_SECRET',
   'RESOURCE_LIST',
 ]);
@@ -41,6 +43,10 @@ const updateConfirmBtn = document.getElementById('update-confirm-btn');
 const updateCancelBtn = document.getElementById('update-cancel-btn');
 const addRuleRowBtn = document.getElementById('add-rule-row-btn');
 const toggleSensitiveBtn = document.getElementById('toggle-sensitive-btn');
+const sendRpcLimiterBtn = document.getElementById('send-rpc-limiter-btn');
+const rpcLimiterCurrentUrlEl = document.getElementById('rpc-limiter-current-url');
+const rpcLimiterStatePathEl = document.getElementById('rpc-limiter-state-path');
+const rpcLimiterUpdatedEl = document.getElementById('rpc-limiter-updated');
 const assetRulesBody = document.getElementById('asset-rules-body');
 const assetRulePriceHeader = document.getElementById('asset-rule-price-header');
 let assetRegistryResourceList = '';
@@ -514,7 +520,13 @@ function readFormConfig() {
   const data = {};
   for (const key of fields) {
     const element = form.elements.namedItem(key);
-    data[key] = element ? String(element.value ?? '').trim() : '';
+    if (!element) {
+      data[key] = '';
+    } else if (element.type === 'checkbox') {
+      data[key] = element.checked ? 'true' : 'false';
+    } else {
+      data[key] = String(element.value ?? '').trim();
+    }
   }
   return data;
 }
@@ -524,9 +536,38 @@ function writeFormConfig(config) {
   for (const key of fields) {
     const element = form.elements.namedItem(key);
     if (element) {
-      element.value = config[key] ?? '';
+      if (element.type === 'checkbox') {
+        element.checked = parseBoolean(config[key]);
+      } else {
+        element.value = config[key] ?? '';
+      }
     }
   }
+}
+
+function parseBoolean(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function renderRpcLimiterStatus(status) {
+  if (!status) {
+    rpcLimiterCurrentUrlEl.value = '';
+    rpcLimiterStatePathEl.textContent = '—';
+    rpcLimiterUpdatedEl.textContent = '';
+    return;
+  }
+
+  rpcLimiterCurrentUrlEl.value = status.currentRpcUrl || '';
+  rpcLimiterStatePathEl.textContent = status.path || '—';
+  const updatedParts = [];
+  if (status.updatedBy) {
+    updatedParts.push(`updated by ${status.updatedBy}`);
+  }
+  if (status.updatedAt) {
+    updatedParts.push(`at ${status.updatedAt}`);
+  }
+  rpcLimiterUpdatedEl.textContent = updatedParts.length ? updatedParts.join(' ') : '';
 }
 
 function appendLog(line) {
@@ -1027,6 +1068,7 @@ async function saveAllSettings() {
     assetRules: assetRuleRows,
   };
   const result = await window.botApi.saveSettings(payload);
+  renderRpcLimiterStatus(result.rpcLimiter);
   assetRuleRows = Array.isArray(result.assetRules) ? normalizeAssetRuleRows(result.assetRules) : assetRuleRows;
   return result;
 }
@@ -1034,6 +1076,7 @@ async function saveAllSettings() {
 async function boot() {
   const state = await window.botApi.getSettings();
   writeFormConfig(state.config);
+  renderRpcLimiterStatus(state.rpcLimiter);
   assetRuleRows = Array.isArray(state.assetRules) && state.assetRules.length ? normalizeAssetRuleRows(state.assetRules) : buildDefaultAssetRuleRows();
   ensureAssetRuleRows();
   renderAssetRuleRows();
@@ -1124,6 +1167,19 @@ saveBtn.addEventListener('click', async () => {
   lastSavedConfig = currentConfig;
   lastSavedAssetRules = currentRules;
   await refreshBotStatus();
+});
+
+sendRpcLimiterBtn.addEventListener('click', async () => {
+  sendRpcLimiterBtn.disabled = true;
+  try {
+    const status = await window.botApi.sendSettingsToRpcLimiter({ config: readFormConfig() });
+    renderRpcLimiterStatus(status);
+    appendLog(`[${new Date().toISOString()}] [INFO] Sent settings to RPC Limiter`);
+  } catch (err) {
+    appendLog(`[${new Date().toISOString()}] [ERROR] ${err?.message || String(err)}`);
+  } finally {
+    sendRpcLimiterBtn.disabled = false;
+  }
 });
 
 startBtn.addEventListener('click', async () => {

@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('botApi', {
   startBot: () => ipcRenderer.invoke('bot:start'),
   stopBot: () => ipcRenderer.invoke('bot:stop'),
   applyRunningSettings: (payload) => ipcRenderer.invoke('bot:apply-running-settings', payload),
+  sendSettingsToRpcLimiter: (payload) => ipcRenderer.invoke('rpc-limiter:send-settings', payload),
+  getRpcLimiterStatus: () => ipcRenderer.invoke('rpc-limiter:get-status'),
   cancelOrder: (payload) => ipcRenderer.invoke('bot:cancel-order', payload),
   getBotStatus: () => ipcRenderer.invoke('bot:status'),
   rerunAssets: (assets) => ipcRenderer.invoke('bot:rerun-assets', assets),
