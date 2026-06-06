@@ -1184,16 +1184,17 @@ export class GmMarketBot {
     }
 
     const wallet = this.wallet.publicKey.toBase58();
+    const refreshBalances = !this.running;
 
-    const solBalance = await this.getSolBalance({ refresh: true });
-    const atlasBalance = await this.getWalletBalanceForMint(QUOTE_ATLAS_MINT, 'ATLAS', { refresh: true });
-    const usdcBalance = await this.getWalletBalanceForMint(QUOTE_USDC_MINT, 'USDC', { refresh: true });
+    const solBalance = await this.getSolBalance({ refresh: refreshBalances });
+    const atlasBalance = await this.getWalletBalanceForMint(QUOTE_ATLAS_MINT, 'ATLAS', { refresh: refreshBalances });
+    const usdcBalance = await this.getWalletBalanceForMint(QUOTE_USDC_MINT, 'USDC', { refresh: refreshBalances });
 
     const inventory = await Promise.all(
       this.trackedResources.map(async (resource) => ({
         asset: getResourceLabel(resource),
         mint: resource.mint.toBase58(),
-        balance: await this.getWalletBalanceForMint(resource.mint, resource.name, { refresh: true }),
+        balance: await this.getWalletBalanceForMint(resource.mint, resource.name, { refresh: refreshBalances }),
       })),
     );
 
