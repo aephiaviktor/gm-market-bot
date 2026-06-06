@@ -2084,6 +2084,10 @@ export class GmMarketBot {
         try {
           let openOrders: BotOpenOrderStatus[] | null = null;
 
+          if (this.running && isTracked) {
+            openOrders = this.buildOpenOrdersSnapshotFromState(resource, now);
+          }
+
           if (!isTracked) {
             const cached = this.passiveOpenOrdersCache.get(mintKey);
             if (cached) {
@@ -2159,6 +2163,34 @@ export class GmMarketBot {
     return await this.annotateMarketLeaders(sorted);
   }
 
+  private buildOpenOrdersSnapshotFromState(resource: ResourceConfig, updatedAt: string): BotOpenOrderStatus[] {
+    const mintKey = resource.mint.toBase58();
+    const resourceState = ensureResourceState(this.state, mintKey);
+    const quoteSymbol = getQuoteSymbolForMint(getQuoteMintForResource(resource));
+    const orders: BotOpenOrderStatus[] = [];
+
+    for (const side of ['buy', 'sell'] as AssetRuleSide[]) {
+      const sideState = getSideState(resourceState, side);
+      for (const [orderId, order] of Object.entries(sideState.openOrders)) {
+        const quantity = order.quantity ?? order.remaining;
+        orders.push({
+          id: orderId,
+          asset: getResourceLabel(resource),
+          mint: mintKey,
+          side,
+          price: order.price,
+          quantity,
+          remaining: order.remaining,
+          partiallyFilled: order.remaining < quantity,
+          updatedAt: order.updatedAt ?? updatedAt,
+          currency: quoteSymbol,
+        });
+      }
+    }
+
+    return orders;
+  }
+
   private getRelevantBadgeThresholds(): Map<string, { buy: number; sell: number }> {
     const thresholds = new Map<string, { buy: number; sell: number }>();
 
@@ -2220,7 +2252,13 @@ export class GmMarketBot {
         const quoteMint = new PublicKey(quoteMintRaw);
         try {
           let cached = this.marketLeaderCache.get(marketKey);
-          if (!cached || Date.now() >= cached.expiresAt) {
+          if (!cached) {
+            if (this.running) {
+              return;
+            }
+          }
+
+          if (!cached || (!this.running && Date.now() >= cached.expiresAt)) {
             const marketOrders = await this.gm.getOpenOrdersForAsset(this.connection, new PublicKey(mint), GM_PROGRAM_ID);
             const threshold = thresholds.get(mint) ?? { buy: 1, sell: 1 };
             const buyOrders = marketOrders.filter(
