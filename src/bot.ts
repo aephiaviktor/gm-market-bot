@@ -160,10 +160,10 @@ function createFailoverConnection(
   const primary = new Connection(primaryUrl, connectionConfig);
   const fallback = fallbackUrl && fallbackUrl !== primaryUrl ? new Connection(fallbackUrl, connectionConfig) : null;
   const limiter = new RpcRequestRateLimiter(getRequestsPerSecond, logger, useSharedLimiter, 'GM Market Bot');
-  const tokenAccountsByOwnerCache = new Map<string, Promise<unknown>>();
+  const connectionLookupCache = new Map<string, Promise<unknown>>();
 
   const clearLookupCache = () => {
-    tokenAccountsByOwnerCache.clear();
+    connectionLookupCache.clear();
   };
 
   return new Proxy(primary, {
@@ -183,10 +183,10 @@ function createFailoverConnection(
         const method = String(prop);
         const label = `Connection.${String(prop)}()`;
         const bucketName = prop === 'sendRawTransaction' ? 'tx:shared' : 'rpc:shared';
-        const cacheKey = getTokenAccountsByOwnerCacheKey(method, args);
+        const cacheKey = getConnectionLookupCacheKey(method, args);
 
         if (cacheKey) {
-          const cached = tokenAccountsByOwnerCache.get(cacheKey);
+          const cached = connectionLookupCache.get(cacheKey);
           if (cached) {
             return await cached;
           }
@@ -219,9 +219,9 @@ function createFailoverConnection(
         })();
 
         if (cacheKey) {
-          tokenAccountsByOwnerCache.set(cacheKey, resultPromise);
+          connectionLookupCache.set(cacheKey, resultPromise);
           resultPromise.catch(() => {
-            tokenAccountsByOwnerCache.delete(cacheKey);
+            connectionLookupCache.delete(cacheKey);
           });
         }
 
@@ -231,20 +231,22 @@ function createFailoverConnection(
   }) as Connection;
 }
 
-function getTokenAccountsByOwnerCacheKey(method: string, args: unknown[]): string | null {
-  if (method !== 'getParsedTokenAccountsByOwner' || args.length < 2) {
-    return null;
+function getConnectionLookupCacheKey(method: string, args: unknown[]): string | null {
+  if (method === 'getAccountInfo' && args[0] instanceof PublicKey) {
+    return `accountInfo:${args[0].toBase58()}`;
   }
 
-  const owner = args[0];
-  const filter = args[1];
-  const mint = filter && typeof filter === 'object' ? (filter as { mint?: unknown }).mint : undefined;
+  if (method === 'getParsedTokenAccountsByOwner' && args.length >= 2) {
+    const owner = args[0];
+    const filter = args[1];
+    const mint = filter && typeof filter === 'object' ? (filter as { mint?: unknown }).mint : undefined;
 
-  if (!(owner instanceof PublicKey) || !(mint instanceof PublicKey)) {
-    return null;
+    if (owner instanceof PublicKey && mint instanceof PublicKey) {
+      return `parsedTokenAccountsByOwner:${owner.toBase58()}:${mint.toBase58()}`;
+    }
   }
 
-  return `${owner.toBase58()}:${mint.toBase58()}`;
+  return null;
 }
 
 function clearConnectionLookupCache(connection: Connection) {
