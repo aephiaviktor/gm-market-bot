@@ -41,6 +41,11 @@ const SHIP_MINTS = new Set(
     ? GM_MARKET_ASSET_REGISTRY.slice(SHIP_REGISTRY_START_INDEX, SHIP_REGISTRY_END_INDEX + 1).map((entry) => entry.mint)
     : [],
 );
+const CLEAR_CONNECTION_LOOKUP_CACHE = Symbol('clearConnectionLookupCache');
+
+type CachedRpcConnection = Connection & {
+  [CLEAR_CONNECTION_LOOKUP_CACHE]?: () => void;
+};
 
 class RpcRequestRateLimiter {
   private queue: Promise<void> = Promise.resolve();
@@ -155,9 +160,18 @@ function createFailoverConnection(
   const primary = new Connection(primaryUrl, connectionConfig);
   const fallback = fallbackUrl && fallbackUrl !== primaryUrl ? new Connection(fallbackUrl, connectionConfig) : null;
   const limiter = new RpcRequestRateLimiter(getRequestsPerSecond, logger, useSharedLimiter, 'GM Market Bot');
+  const tokenAccountsByOwnerCache = new Map<string, Promise<unknown>>();
+
+  const clearLookupCache = () => {
+    tokenAccountsByOwnerCache.clear();
+  };
 
   return new Proxy(primary, {
     get(target, prop, receiver) {
+      if (prop === CLEAR_CONNECTION_LOOKUP_CACHE) {
+        return clearLookupCache;
+      }
+
       const primaryValue = Reflect.get(target, prop, receiver);
       if (typeof primaryValue !== 'function') {
         return primaryValue;
@@ -169,32 +183,72 @@ function createFailoverConnection(
         const method = String(prop);
         const label = `Connection.${String(prop)}()`;
         const bucketName = prop === 'sendRawTransaction' ? 'tx:shared' : 'rpc:shared';
-        try {
-          return await callRpcWithRateLimitRetry(
-            label,
-            () => primaryValue.apply(target, args),
-            limiter,
-            logger,
-            bucketName,
-            method,
-          );
-        } catch (error) {
-          if (!fallback || typeof fallbackValue !== 'function') {
-            throw error;
+        const cacheKey = getTokenAccountsByOwnerCacheKey(method, args);
+
+        if (cacheKey) {
+          const cached = tokenAccountsByOwnerCache.get(cacheKey);
+          if (cached) {
+            return await cached;
           }
-          logger.warn(`Primary RPC failed for Connection.${String(prop)}(), trying fallback RPC.`, error);
-          return await callRpcWithRateLimitRetry(
-            `fallback Connection.${String(prop)}()`,
-            () => fallbackValue.apply(fallback, args),
-            limiter,
-            logger,
-            bucketName,
-            method,
-          );
         }
+
+        const resultPromise = (async () => {
+          try {
+            return await callRpcWithRateLimitRetry(
+              label,
+              () => primaryValue.apply(target, args),
+              limiter,
+              logger,
+              bucketName,
+              method,
+            );
+          } catch (error) {
+            if (!fallback || typeof fallbackValue !== 'function') {
+              throw error;
+            }
+            logger.warn(`Primary RPC failed for Connection.${String(prop)}(), trying fallback RPC.`, error);
+            return await callRpcWithRateLimitRetry(
+              `fallback Connection.${String(prop)}()`,
+              () => fallbackValue.apply(fallback, args),
+              limiter,
+              logger,
+              bucketName,
+              method,
+            );
+          }
+        })();
+
+        if (cacheKey) {
+          tokenAccountsByOwnerCache.set(cacheKey, resultPromise);
+          resultPromise.catch(() => {
+            tokenAccountsByOwnerCache.delete(cacheKey);
+          });
+        }
+
+        return await resultPromise;
       };
     },
   }) as Connection;
+}
+
+function getTokenAccountsByOwnerCacheKey(method: string, args: unknown[]): string | null {
+  if (method !== 'getParsedTokenAccountsByOwner' || args.length < 2) {
+    return null;
+  }
+
+  const owner = args[0];
+  const filter = args[1];
+  const mint = filter && typeof filter === 'object' ? (filter as { mint?: unknown }).mint : undefined;
+
+  if (!(owner instanceof PublicKey) || !(mint instanceof PublicKey)) {
+    return null;
+  }
+
+  return `${owner.toBase58()}:${mint.toBase58()}`;
+}
+
+function clearConnectionLookupCache(connection: Connection) {
+  (connection as CachedRpcConnection)[CLEAR_CONNECTION_LOOKUP_CACHE]?.();
 }
 
 export type AssetRuleSide = 'buy' | 'sell';
@@ -1373,6 +1427,7 @@ export class GmMarketBot {
         const signature = await this.connection.sendRawTransaction(transaction.serialize());
         return { signature, blockhash, lastValidBlockHeight };
       } finally {
+        clearConnectionLookupCache(this.connection);
         this.nextTransactionSubmitAtMs = Date.now() + 1000 / this.config.rpcTxSendRateLimitPerSecond;
       }
     });
@@ -1960,6 +2015,7 @@ export class GmMarketBot {
   }
 
   private async runCycle() {
+    clearConnectionLookupCache(this.connection);
     this.walletBalanceCache.clear();
     this.solBalanceCache = null;
     this.passiveOpenOrdersCache.clear();
