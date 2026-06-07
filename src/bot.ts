@@ -2252,11 +2252,6 @@ export class GmMarketBot {
         const quoteMint = new PublicKey(quoteMintRaw);
         try {
           let cached = this.marketLeaderCache.get(marketKey);
-          if (!cached) {
-            if (this.running) {
-              return;
-            }
-          }
 
           if (!cached || (!this.running && Date.now() >= cached.expiresAt)) {
             const marketOrders = await this.gm.getOpenOrdersForAsset(this.connection, new PublicKey(mint), GM_PROGRAM_ID);
