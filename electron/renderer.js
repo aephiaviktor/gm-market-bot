@@ -13,7 +13,7 @@ const fields = [
 
 const STATUS_POLL_MS = 60000;
 const AUTO_RERUN_COOLDOWN_MS = 120000;
-const APP_VERSION = '0.2.9';
+const APP_VERSION = '0.3.0';
 const FULL_RESTART_CONFIG_KEYS = new Set([
   'AEPHIA_API_KEY',
   'RPC_URL',
@@ -89,12 +89,14 @@ const RAW_MATERIAL_START = 'Arco';
 const RAW_MATERIAL_END = 'Titanium Ore';
 const COMPONENT_START = 'Ammo';
 const COMPONENT_END = 'Toolkits';
+const CREW_PACK_START = 'Silver 1 Card Pack';
+const CREW_PACK_END = 'Platinum 5 Card Pack';
 const SHIP_START = 'Busan Pulse';
 const SHIP_END = 'Rainbow Phi';
 const SHIP_PARTS_START = 'Fimbul Airbike (ship parts)';
 const SHIP_PARTS_END = 'Rainbow Phi (ship parts)';
-const ASSET_RULE_GROUP_ORDER = ['raw', 'components', 'ships', 'ship-parts'];
-const ASSET_RULE_GROUPS = new Set(['raw', 'components', 'ships', 'ship-parts']);
+const ASSET_RULE_GROUP_ORDER = ['raw', 'components', 'crew-packs', 'ships', 'ship-parts'];
+const ASSET_RULE_GROUPS = new Set(['raw', 'components', 'crew-packs', 'ships', 'ship-parts']);
 
 function setRunning(running) {
   startBtn.disabled = running;
@@ -259,6 +261,9 @@ function getResourceOptions(group = activeAssetRuleGroup) {
   if (group === 'components') {
     return sliceOptionsByNameRange(options, COMPONENT_START, COMPONENT_END);
   }
+  if (group === 'crew-packs') {
+    return sliceOptionsByNameRange(options, CREW_PACK_START, CREW_PACK_END);
+  }
   return sliceOptionsByNameRange(options, RAW_MATERIAL_START, RAW_MATERIAL_END);
 }
 
@@ -275,6 +280,10 @@ function getAssetRuleGroupForAsset(asset) {
   if (components.has(asset)) {
     return 'components';
   }
+  const crewPacks = new Set(getResourceOptions('crew-packs').map((option) => option.value));
+  if (crewPacks.has(asset)) {
+    return 'crew-packs';
+  }
   return 'raw';
 }
 
@@ -287,7 +296,7 @@ function getAssetRuleGroupForRow(row) {
 }
 
 function buildDefaultAssetRuleRows(group = null) {
-  const groups = group && ASSET_RULE_GROUPS.has(group) ? [group] : ['raw', 'components', 'ships', 'ship-parts'];
+  const groups = group && ASSET_RULE_GROUPS.has(group) ? [group] : ASSET_RULE_GROUP_ORDER;
   return groups.flatMap((nextGroup) =>
     getResourceOptions(nextGroup).map((resource) => ({
       group: nextGroup,
@@ -400,7 +409,9 @@ function renderAssetRuleRows() {
           ? 'ship part'
           : activeAssetRuleGroup === 'components'
             ? 'component'
-            : 'raw material';
+            : activeAssetRuleGroup === 'crew-packs'
+              ? 'crew pack'
+              : 'raw material';
     assetRulesBody.innerHTML = `<tr><td colspan="6" class="empty-state">No ${groupLabel} rules yet. Use + Add Row.</td></tr>`;
     return;
   }
@@ -1265,7 +1276,7 @@ for (const button of tabButtons) {
 
 for (const button of assetRuleTabButtons) {
   button.addEventListener('click', () => {
-    activeAssetRuleGroup = ['components', 'ships', 'ship-parts'].includes(button.dataset.assetRuleGroup)
+    activeAssetRuleGroup = ['components', 'crew-packs', 'ships', 'ship-parts'].includes(button.dataset.assetRuleGroup)
       ? button.dataset.assetRuleGroup
       : 'raw';
     for (const tabButton of assetRuleTabButtons) {

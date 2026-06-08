@@ -3,9 +3,11 @@ export type AssetRegistryEntry = {
   mint: string;
 };
 
-export type AssetRegistryGroup = 'raw' | 'components' | 'ships' | 'ship-parts';
+export type AssetRegistryGroup = 'raw' | 'components' | 'crew-packs' | 'ships' | 'ship-parts';
 
 const SHIP_PART_SUFFIX = ' (ship parts)';
+const CREW_PACK_START_NAME = 'Silver 1 Card Pack';
+const CREW_PACK_END_NAME = 'Platinum 5 Card Pack';
 
 export const GM_MARKET_ASSET_REGISTRY: AssetRegistryEntry[] = [
   { name: 'Arco', mint: 'ARCoQ9dndpg6wE2rRexzfwgJR3NoWWhpcww3xQcQLukg' },
@@ -107,6 +109,14 @@ export const GM_MARKET_ASSET_REGISTRY: AssetRegistryEntry[] = [
   { name: 'Pearce T1', mint: '56nh4FvMJnSpkWJcmXc1nJtYhSQXuqb7nVMGALr31RVc' },
   { name: 'Rainbow Phi', mint: 'phi4PYgmxeTMLLpGkU87T16VUZ6AjWZESkfT1JGJ635' },
 
+  { name: 'Silver 1 Card Pack', mint: 'CPS1gTEio7PqnAmDmWuCfiTBbtDRRsA8cwdQe3TqgGsf' },
+  { name: 'Silver 5 Card Pack', mint: 'CPS5deX4R2BkA1X4SRrk5V2LqmT7CXwNdnC5syrpAmDK' },
+  { name: 'Gold 1 Card Pack', mint: 'CPG1B4jv6D2cZRkfXWawxSrE9SvhxdiDT1yKP4cNmHSe' },
+  { name: 'Gold 5 Card Pack', mint: 'CPG5JB1Z83TsYYCaVJLLpWVcoBBAnQ2T2nzmR9tbi3WU' },
+  { name: 'Presale 10 Card Pack', mint: 'CRWPXjZw73dMW3pG7UMhVWDrfk5NnzMCMuWj6hVLMCYm' },
+  { name: 'Platinum 1 Card Pack', mint: 'CPP1iv66iqZYeGEYuGAmjTbRJMbNazCWu8r2Ln5TUsc5' },
+  { name: 'Platinum 5 Card Pack', mint: 'CPP5rhCt7tvjco6vbVMawzg4WHmr3Thr67y7PcBcbfSz' },
+
   { name: 'Fimbul Airbike (ship parts)', mint: 'SP935x1ksMqw2kDi7Tg6E9Rt4sKFBx9CKM227vgYNTK' },
   { name: 'Fimbul ECOS Unibomba (ship parts)', mint: 'SPjm3Q229eBCftiidm8HEfwyuEWwPi7pByzSnmouKHn' },
   { name: 'Ogrika Ruch (ship parts)', mint: 'SP8wv47jZkfqyBXH184f8TqY7A9QXUswkRCD6k9hVg2' },
@@ -186,6 +196,12 @@ function getRegistryRangeByGroup(group: AssetRegistryGroup, registry: AssetRegis
   if (group === 'ship-parts') {
     const startIndex = registry.findIndex((entry) => entry.name === 'Fimbul Airbike' + SHIP_PART_SUFFIX);
     const endIndex = registry.findIndex((entry) => entry.name === 'Rainbow Phi' + SHIP_PART_SUFFIX);
+    return startIndex >= 0 && endIndex >= startIndex ? registry.slice(startIndex, endIndex + 1) : [];
+  }
+
+  if (group === 'crew-packs') {
+    const startIndex = registry.findIndex((entry) => entry.name === CREW_PACK_START_NAME);
+    const endIndex = registry.findIndex((entry) => entry.name === CREW_PACK_END_NAME);
     return startIndex >= 0 && endIndex >= startIndex ? registry.slice(startIndex, endIndex + 1) : [];
   }
 

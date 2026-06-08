@@ -1039,7 +1039,7 @@ function getResourceLabel(resource: ResourceConfig): string {
 
 function normalizeAssetRuleGroup(value: string | null | undefined, asset: string): AssetRegistryGroup {
   const normalized = String(value ?? '').trim();
-  if (normalized === 'raw' || normalized === 'components' || normalized === 'ships' || normalized === 'ship-parts') {
+  if (normalized === 'raw' || normalized === 'components' || normalized === 'crew-packs' || normalized === 'ships' || normalized === 'ship-parts') {
     return normalized;
   }
 

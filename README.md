@@ -7,7 +7,7 @@ The bot is intended for Aephia members. Startup is protected by Aephia API token
 ## What It Does
 
 - Manages buy and sell rules for selected marketplace assets.
-- Supports raw materials, components, ships, and ship parts.
+- Supports raw materials, components, crew packs, ships, and ship parts.
 - Reads current market orders and wallet balances.
 - Places, cancels, and replaces orders when configured rules require it.
 - Uses configurable RPC request and transaction submission rate limits.
