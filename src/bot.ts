@@ -31,6 +31,7 @@ const RPC_RATE_LIMIT_RETRY_DELAYS_MS = [2000, 5000, 10000];
 const RPC_LIMITER_SLOW_WAIT_LOG_MS = 100;
 const RPC_LIMITER_WAIT_LOG_THROTTLE_MS = 60000;
 const SHIP_BUY_OUTBID_PCT = 0.005;
+const CREW_PACK_OUTBID_PCT = 0.005;
 const SHIP_PART_SUFFIX = ' (ship parts)';
 const SHIP_START_NAME = 'Busan Pulse';
 const SHIP_END_NAME = 'Rainbow Phi';
@@ -869,6 +870,27 @@ function roundUp(value: number, decimals: number): number {
   return Math.ceil(value * factor) / factor;
 }
 
+type OutbidOptions = { outbidPct?: number; wholeUnit?: boolean };
+
+function applyBuyOutbid(basePrice: number, options?: OutbidOptions): number {
+  if (!options?.outbidPct) {
+    return basePrice + ORDER_PRICE_NUDGE;
+  }
+  const withPct = basePrice * (1 + options.outbidPct);
+  return options.wholeUnit ? Math.ceil(withPct) : roundUp(withPct, 6);
+}
+
+function applySellUndercut(basePrice: number, options?: OutbidOptions): number {
+  if (!options?.outbidPct) {
+    return basePrice - ORDER_PRICE_NUDGE;
+  }
+  const withPct = basePrice * (1 - options.outbidPct);
+  if (withPct <= 0) {
+    return 0;
+  }
+  return options.wholeUnit ? Math.floor(withPct) : roundDown(withPct, 6);
+}
+
 function sortOrdersForSide(side: AssetRuleSide, orders: Order[]): Order[] {
   return [...orders].sort((a, b) => (side === 'buy' ? b.uiPrice - a.uiPrice : a.uiPrice - b.uiPrice));
 }
@@ -1615,6 +1637,7 @@ export class GmMarketBot {
     allSellOrders: Order[],
     minPrice: number,
     minRelevantQuantity: number,
+    options?: { outbidPct?: number; wholeUnit?: boolean },
   ): number {
     const externalSellOrders = allSellOrders
       .filter(
@@ -1631,15 +1654,13 @@ export class GmMarketBot {
     const bestSell = externalSellOrders[0];
 
     if (bestSell.uiPrice >= minPrice) {
-      const undercutPrice = Math.max(0, bestSell.uiPrice - ORDER_PRICE_NUDGE);
-      return Math.max(minPrice, roundDown(undercutPrice, 6));
+      return Math.max(minPrice, applySellUndercut(bestSell.uiPrice, options));
     }
 
     const nextHigherSell = externalSellOrders.find((o) => o.uiPrice >= minPrice);
 
     if (nextHigherSell) {
-      const undercutPrice = Math.max(0, nextHigherSell.uiPrice - ORDER_PRICE_NUDGE);
-      return Math.max(minPrice, roundDown(undercutPrice, 6));
+      return Math.max(minPrice, applySellUndercut(nextHigherSell.uiPrice, options));
     }
 
     return minPrice;
@@ -1649,7 +1670,7 @@ export class GmMarketBot {
     allBuyOrders: Order[],
     maxBuyPrice: number,
     minRelevantQuantity: number,
-    options?: { outbidPct?: number },
+    options?: { outbidPct?: number; wholeUnit?: boolean },
   ): number {
     const externalBuyOrders = allBuyOrders
       .filter(
@@ -1666,15 +1687,13 @@ export class GmMarketBot {
     const bestBuy = externalBuyOrders[0];
 
     if (bestBuy.uiPrice < maxBuyPrice - ORDER_PRICE_EPSILON) {
-      const improvedBid = options?.outbidPct ? bestBuy.uiPrice * (1 + options.outbidPct) : bestBuy.uiPrice + ORDER_PRICE_NUDGE;
-      return Math.min(maxBuyPrice, roundUp(improvedBid, 6));
+      return Math.min(maxBuyPrice, applyBuyOutbid(bestBuy.uiPrice, options));
     }
 
     if (Math.abs(bestBuy.uiPrice - maxBuyPrice) < ORDER_PRICE_EPSILON) {
       const nextLowerBuy = externalBuyOrders.find((o) => o.uiPrice < maxBuyPrice - ORDER_PRICE_EPSILON);
       if (nextLowerBuy) {
-        const improvedBid = options?.outbidPct ? nextLowerBuy.uiPrice * (1 + options.outbidPct) : nextLowerBuy.uiPrice + ORDER_PRICE_NUDGE;
-        return Math.min(maxBuyPrice, roundUp(improvedBid, 6));
+        return Math.min(maxBuyPrice, applyBuyOutbid(nextLowerBuy.uiPrice, options));
       }
       return maxBuyPrice;
     }
@@ -1682,8 +1701,7 @@ export class GmMarketBot {
     const nextLowerBuy = externalBuyOrders.find((o) => o.uiPrice <= maxBuyPrice);
 
     if (nextLowerBuy) {
-      const improvedBid = options?.outbidPct ? nextLowerBuy.uiPrice * (1 + options.outbidPct) : nextLowerBuy.uiPrice + ORDER_PRICE_NUDGE;
-      return Math.min(maxBuyPrice, roundUp(improvedBid, 6));
+      return Math.min(maxBuyPrice, applyBuyOutbid(nextLowerBuy.uiPrice, options));
     }
 
     return maxBuyPrice;
@@ -1705,6 +1723,7 @@ export class GmMarketBot {
     quoteMintOverride?: PublicKey,
     marketOrderSnapshot?: MarketOrderSnapshot,
     limit?: number | null,
+    outbidOptions?: { outbidPct?: number; wholeUnit?: boolean },
   ) {
     this.logger.info(`[${new Date().toISOString()}] Checking ${resource.name} sell market...`);
     const cancelledIds = new Set<string>();
@@ -1723,7 +1742,7 @@ export class GmMarketBot {
 
     const walletBalance = await this.getWalletBalanceForMint(resource.mint, resource.name);
     const relevantSellQuantity = getRelevantOrderThreshold(minSellQuantity, this.config.relevantSellOrderPct);
-    const targetPrice = this.getTargetSellPrice(allOrders, minPrice, relevantSellQuantity);
+    const targetPrice = this.getTargetSellPrice(allOrders, minPrice, relevantSellQuantity, outbidOptions);
 
     this.logger.info(`${resource.name} balance: ${walletBalance}`);
 
@@ -1816,6 +1835,7 @@ export class GmMarketBot {
     resource: ResourceConfig,
     quoteMintOverride?: PublicKey,
     marketOrderSnapshot?: MarketOrderSnapshot,
+    outbidOptions?: { outbidPct?: number; wholeUnit?: boolean },
   ) {
     this.logger.info(`[${new Date().toISOString()}] Checking ${resource.name} buy market...`);
     const cancelledIds = new Set<string>();
@@ -1823,7 +1843,6 @@ export class GmMarketBot {
 
     const quoteMint = quoteMintOverride ?? getQuoteMintForResource(resource);
     const quoteSymbol = getQuoteSymbolForMint(quoteMint);
-    const isShipMarket = quoteMint.equals(QUOTE_USDC_MINT);
     const allOrders = allOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && isOrderForQuoteMint(o, quoteMint));
     const myOrders = myOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && isOrderForQuoteMint(o, quoteMint));
     const staleQuoteOrders = myOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && !isOrderForQuoteMint(o, quoteMint));
@@ -1846,7 +1865,7 @@ export class GmMarketBot {
             allOrders,
             maxBuyPrice,
             relevantBuyQuantity,
-            isShipMarket ? { outbidPct: SHIP_BUY_OUTBID_PCT } : undefined,
+            outbidOptions,
           )
         : maxBuyPrice;
 
@@ -1979,6 +1998,12 @@ export class GmMarketBot {
     const sellRules = rules.filter((item) => item.rule.side === 'sell');
     const buyRules = rules.filter((item) => item.rule.side === 'buy');
     const quoteMint = group.group === 'ships' || group.group === 'ship-parts' ? QUOTE_USDC_MINT : getQuoteMintForResource(resource);
+    const outbidOptions =
+      group.group === 'ships' || group.group === 'ship-parts'
+        ? { outbidPct: SHIP_BUY_OUTBID_PCT }
+        : group.group === 'crew-packs'
+          ? { outbidPct: CREW_PACK_OUTBID_PCT, wholeUnit: true }
+          : undefined;
     const hasRunnableSellRule = sellRules.length === 1;
     const hasRunnableBuyRule = buyRules.length === 1;
     const marketOrderSnapshot =
@@ -1997,7 +2022,7 @@ export class GmMarketBot {
       });
     } else if (sellRules.length === 1) {
       const sellRule = sellRules[0];
-      await this.processSellRule(resource, sellRule.rule.quantity, sellRule.rule.price, quoteMint, marketOrderSnapshot, sellRule.rule.limit);
+      await this.processSellRule(resource, sellRule.rule.quantity, sellRule.rule.price, quoteMint, marketOrderSnapshot, sellRule.rule.limit, outbidOptions);
     }
 
     if (buyRules.length > 1) {
@@ -2013,7 +2038,7 @@ export class GmMarketBot {
       });
     } else if (buyRules.length === 1) {
       const buyRule = buyRules[0];
-      await this.processBuyRule(buyRule.rule, buyRule.index, resource, quoteMint, marketOrderSnapshot);
+      await this.processBuyRule(buyRule.rule, buyRule.index, resource, quoteMint, marketOrderSnapshot, outbidOptions);
     }
   }
 
