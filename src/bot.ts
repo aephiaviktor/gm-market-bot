@@ -38,6 +38,7 @@ const RPC_LIMITER_SLOW_WAIT_LOG_MS = 100;
 const RPC_LIMITER_WAIT_LOG_THROTTLE_MS = 60000;
 const SHIP_BUY_OUTBID_PCT = 0.005;
 const CREW_PACK_OUTBID_PCT = 0.005;
+const APP_VERSION = '0.3.3';
 const SHIP_PART_SUFFIX = ' (ship parts)';
 const SHIP_START_NAME = 'Busan Pulse';
 const SHIP_END_NAME = 'Rainbow Phi';
@@ -1212,6 +1213,7 @@ export class GmMarketBot {
     this.invalidateStatusSnapshotCache();
     await this.appendLog({ event: 'START', message: `Bot started for wallet ${this.wallet.publicKey.toBase58()}` });
 
+    this.logger.info(`GM Market Bot v${APP_VERSION} starting (pid ${process.pid}).`);
     this.logger.info(`Hot wallet: ${this.wallet.publicKey.toBase58()}`);
 
     if (this.config.assetRules.length > 0) {
