@@ -28,6 +28,12 @@ const DEFAULT_RPC_REQUESTS_PER_SECOND = 10;
 const DEFAULT_RPC_TX_SEND_RATE_LIMIT_PER_SECOND = 1;
 const DEFAULT_CHAIN_STATUS_REFRESH_INTERVAL_MINUTES = 5;
 const RPC_RATE_LIMIT_RETRY_DELAYS_MS = [2000, 5000, 10000];
+// Per-cycle getSlot() cache: the @staratlas/factory GM SDK calls
+// `connection.getSlot()` once per `accountItemsToOrders` invocation, which
+// fires for every getOpenOrders* call inside a runCycle. Within a single
+// cycle the slot context can shift by at most a couple of seconds of wall
+// time, so reusing it for nearby reads is safe and saves ~10-20 RPCs/cycle.
+const GET_SLOT_CACHE_TTL_MS = 2000;
 const RPC_LIMITER_SLOW_WAIT_LOG_MS = 100;
 const RPC_LIMITER_WAIT_LOG_THROTTLE_MS = 60000;
 const SHIP_BUY_OUTBID_PCT = 0.005;
@@ -162,9 +168,11 @@ function createFailoverConnection(
   const fallback = fallbackUrl && fallbackUrl !== primaryUrl ? new Connection(fallbackUrl, connectionConfig) : null;
   const limiter = new RpcRequestRateLimiter(getRequestsPerSecond, logger, useSharedLimiter, 'GM Market Bot');
   const connectionLookupCache = new Map<string, Promise<unknown>>();
+  let getSlotCache: { slot: number; commitment: string; cachedAtMs: number } | null = null;
 
   const clearLookupCache = () => {
     connectionLookupCache.clear();
+    getSlotCache = null;
   };
 
   return new Proxy(primary, {
@@ -185,6 +193,19 @@ function createFailoverConnection(
         const label = `Connection.${String(prop)}()`;
         const bucketName = prop === 'sendRawTransaction' ? 'tx:shared' : 'rpc:shared';
         const cacheKey = getConnectionLookupCacheKey(method, args);
+
+        // Per-cycle getSlot() cache: return the cached slot if it's still
+        // warm and matches the requested commitment level.
+        if (method === 'getSlot') {
+          const commitment = typeof args[0] === 'string' ? args[0] : 'confirmed';
+          if (
+            getSlotCache &&
+            getSlotCache.commitment === commitment &&
+            Date.now() - getSlotCache.cachedAtMs < GET_SLOT_CACHE_TTL_MS
+          ) {
+            return getSlotCache.slot;
+          }
+        }
 
         if (cacheKey) {
           const cached = connectionLookupCache.get(cacheKey);
@@ -218,6 +239,22 @@ function createFailoverConnection(
             );
           }
         })();
+
+        // Populate the per-cycle getSlot() cache on success so subsequent
+        // calls inside the same runCycle reuse the slot context.
+        if (method === 'getSlot') {
+          const commitment = typeof args[0] === 'string' ? args[0] : 'confirmed';
+          resultPromise.then(
+            (result) => {
+              if (typeof result === 'number') {
+                getSlotCache = { slot: result, commitment, cachedAtMs: Date.now() };
+              }
+            },
+            () => {
+              // Swallow population errors; the next call will retry on its own.
+            },
+          );
+        }
 
         if (cacheKey) {
           connectionLookupCache.set(cacheKey, resultPromise);
