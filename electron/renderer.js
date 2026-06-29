@@ -48,7 +48,6 @@ const rpcLimiterCurrentUrlEl = document.getElementById('rpc-limiter-current-url'
 const rpcLimiterStatePathEl = document.getElementById('rpc-limiter-state-path');
 const rpcLimiterUpdatedEl = document.getElementById('rpc-limiter-updated');
 const assetRulesBody = document.getElementById('asset-rules-body');
-const assetRulePriceHeader = document.getElementById('asset-rule-price-header');
 let assetRegistryResourceList = '';
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
@@ -296,108 +295,109 @@ function getAssetRuleGroupForRow(row) {
 }
 
 function buildDefaultAssetRuleRows(group = null) {
-  const groups = group && ASSET_RULE_GROUPS.has(group) ? [group] : ASSET_RULE_GROUP_ORDER;
-  return groups.flatMap((nextGroup) =>
-    getResourceOptions(nextGroup).map((resource) => ({
-      group: nextGroup,
-      asset: resource.value,
-      side: 'sell',
-      quantity: '',
-      limit: '',
-      price: '',
-    })),
-  );
+  return [];
 }
 
 function ensureAssetRuleRows() {
-  if (!assetRuleRows.length) {
-    assetRuleRows = buildDefaultAssetRuleRows();
-  }
+  assetRuleRows = normalizeAssetRuleRows(assetRuleRows);
 }
 
 function syncRowsWithResources() {
-  if (!assetRuleRows.length) {
-    assetRuleRows = buildDefaultAssetRuleRows();
-    return;
-  }
-
   assetRuleRows = normalizeAssetRuleRows(assetRuleRows);
 }
 
 function normalizeAssetRuleRows(rows) {
-  const options = getAllResourceOptions();
-  const validValues = new Set(options.map((option) => option.value));
-
-  return (Array.isArray(rows) ? rows : []).map((row, index) => {
+  const normalizedRows = (Array.isArray(rows) ? rows : []).map((row) => {
     const group = getAssetRuleGroupForRow(row);
-    const asset = String(row?.asset ?? '').trim();
-    if (validValues.has(asset)) {
-      return {
-        group,
-        asset,
-        side: row?.side === 'buy' ? 'buy' : 'sell',
-        quantity: String(row?.quantity ?? '').trim(),
-        limit: String(row?.limit ?? '').trim(),
-        price: String(row?.price ?? '').trim(),
-      };
-    }
-
     const groupOptions = getResourceOptions(group);
-    const fallbackOptions = groupOptions.length ? groupOptions : options;
-    const fallbackAsset = fallbackOptions[index]?.value ?? fallbackOptions[0]?.value ?? options[0]?.value ?? '';
+    const validValues = new Set(groupOptions.map((option) => option.value));
+    const asset = String(row?.asset ?? '').trim();
+    const isStrategyRow = ['minQuantity', 'maxQuantity', 'minBuyPrice', 'maxBuyPrice', 'minSellPrice', 'maxSellPrice']
+      .some((field) => Object.prototype.hasOwnProperty.call(row || {}, field));
+    const legacySide = row?.side === 'buy' ? 'buy' : 'sell';
+    const legacyQuantity = String(row?.quantity ?? '').trim();
+    const legacyLimit = String(row?.limit ?? '').trim();
+    const legacyPrice = String(row?.price ?? '').trim();
+
     return {
       group,
-      asset: fallbackAsset,
-      side: row?.side === 'buy' ? 'buy' : 'sell',
-      quantity: String(row?.quantity ?? '').trim(),
-      limit: String(row?.limit ?? '').trim(),
-      price: String(row?.price ?? '').trim(),
+      asset: validValues.has(asset) ? asset : '',
+      refill: row?.refill === false || row?.refill === 'false' ? false : true,
+      minQuantity: String(row?.minQuantity ?? (isStrategyRow ? '' : legacySide === 'sell' ? legacyQuantity : '1')).trim(),
+      maxQuantity: String(row?.maxQuantity ?? (isStrategyRow ? '' : legacyLimit || legacyQuantity)).trim(),
+      minBuyPrice: String(row?.minBuyPrice ?? '').trim(),
+      maxBuyPrice: String(row?.maxBuyPrice ?? (isStrategyRow ? '' : legacySide === 'buy' ? legacyPrice : '')).trim(),
+      minSellPrice: String(row?.minSellPrice ?? (isStrategyRow ? '' : legacySide === 'sell' ? legacyPrice : '')).trim(),
+      maxSellPrice: String(row?.maxSellPrice ?? '').trim(),
     };
   });
-}
 
-function updateRuleHint(rowElement, side) {
-  const quantityHint = rowElement.querySelector('[data-role="quantity-hint"]');
-  const limitHint = rowElement.querySelector('[data-role="limit-hint"]');
-  const priceHint = rowElement.querySelector('[data-role="price-hint"]');
-  if (quantityHint) {
-    quantityHint.textContent = side === 'buy' ? 'Max buy quantity' : 'Min sell quantity';
+  const combinedRows = [];
+  const rowByKey = new Map();
+
+  for (const row of normalizedRows) {
+    if (!row.asset) {
+      combinedRows.push(row);
+      continue;
+    }
+
+    const key = `${row.group}|${row.asset}`;
+    const existing = rowByKey.get(key);
+    if (!existing) {
+      rowByKey.set(key, row);
+      combinedRows.push(row);
+      continue;
+    }
+
+    existing.refill = existing.refill !== false && row.refill !== false;
+    if (row.minSellPrice) {
+      existing.minQuantity = row.minQuantity || existing.minQuantity;
+    } else if (!existing.minQuantity) {
+      existing.minQuantity = row.minQuantity;
+    }
+
+    const existingMax = Number.parseInt(stripIntegerSeparators(existing.maxQuantity), 10);
+    const rowMax = Number.parseInt(stripIntegerSeparators(row.maxQuantity), 10);
+    if (Number.isFinite(rowMax) && (!Number.isFinite(existingMax) || rowMax > existingMax)) {
+      existing.maxQuantity = row.maxQuantity;
+    }
+
+    for (const field of ['minBuyPrice', 'maxBuyPrice', 'minSellPrice', 'maxSellPrice']) {
+      if (row[field]) {
+        existing[field] = row[field];
+      }
+    }
   }
-  if (limitHint) {
-    limitHint.textContent = side === 'buy' ? 'Max buy quantity' : 'Max sell quantity';
-  }
-  if (priceHint) {
-    priceHint.textContent = side === 'buy' ? 'Max price' : 'Min price';
-  }
+
+  return combinedRows;
 }
 
 function renderAssetRuleRows() {
   syncRowsWithResources();
   const isShipMarket = activeAssetRuleGroup === 'ships' || activeAssetRuleGroup === 'ship-parts';
-  if (assetRulePriceHeader) {
-    assetRulePriceHeader.textContent = isShipMarket ? 'Price (USDC)' : 'Price (ATLAS)';
-  }
+  const priceUnit = isShipMarket ? 'USDC' : 'ATLAS';
   const allOptions = getAllResourceOptions();
   const options = getResourceOptions(activeAssetRuleGroup);
   const visibleRows = assetRuleRows
     .map((row, index) => ({ row, index }))
-    .filter(({ row }) => getAssetRuleGroupForRow(row) === activeAssetRuleGroup);
-
-  const rulesTable = assetRulesBody.closest('table');
-  if (rulesTable) {
-    rulesTable.classList.toggle('ships-rules-table', isShipMarket);
-  }
+    .filter(({ row }) => getAssetRuleGroupForRow(row) === activeAssetRuleGroup)
+    .sort((a, b) => {
+      const assetA = getAssetLabel(a.row.asset) || a.row.asset || '';
+      const assetB = getAssetLabel(b.row.asset) || b.row.asset || '';
+      return assetA.localeCompare(assetB, undefined, { numeric: true });
+    });
 
   assetRulesBody.innerHTML = '';
   addRuleRowBtn.disabled = options.length === 0;
+  const emptyColspan = 9;
 
   if (!allOptions.length) {
-    assetRulesBody.innerHTML = '<tr><td colspan="6" class="empty-state">Asset registry unavailable. Save a valid Aephia API Key in Settings to load the managed asset list.</td></tr>';
+    assetRulesBody.innerHTML = `<tr><td colspan="${emptyColspan}" class="empty-state">Asset registry unavailable. Save a valid Aephia API Key in Settings to load the managed asset list.</td></tr>`;
     return;
   }
 
   if (!options.length) {
-    assetRulesBody.innerHTML = '<tr><td colspan="6" class="empty-state">No assets available for this group.</td></tr>';
+    assetRulesBody.innerHTML = `<tr><td colspan="${emptyColspan}" class="empty-state">No assets available for this group.</td></tr>`;
     return;
   }
 
@@ -412,38 +412,53 @@ function renderAssetRuleRows() {
             : activeAssetRuleGroup === 'crew-packs'
               ? 'crew pack'
               : 'raw material';
-    assetRulesBody.innerHTML = `<tr><td colspan="6" class="empty-state">No ${groupLabel} rules yet. Use + Add Row.</td></tr>`;
+    assetRulesBody.innerHTML = `<tr><td colspan="${emptyColspan}" class="empty-state">No ${groupLabel} rules yet. Use + Add Row.</td></tr>`;
     return;
   }
 
   visibleRows.forEach(({ row, index }) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      <td class="refill-cell">
+        <input data-index="${index}" data-field="refill" type="checkbox" />
+      </td>
       <td>
         <select data-index="${index}" data-field="asset"></select>
       </td>
       <td>
-        <select data-index="${index}" data-field="side">
-          <option value="buy">buy</option>
-          <option value="sell">sell</option>
-        </select>
-      </td>
-      <td>
-        <div class="cell-stack">
-          <input data-index="${index}" data-field="quantity" type="number" min="0" step="1" inputmode="numeric" />
-          <span class="cell-hint" data-role="quantity-hint"></span>
+        <div class="cell-stack compact-cell">
+          <input data-index="${index}" data-field="minQuantity" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" />
+          <span class="cell-hint">Min order</span>
         </div>
       </td>
       <td>
-        <div class="cell-stack">
-          <input data-index="${index}" data-field="limit" type="number" min="0" step="1" inputmode="numeric" />
-          <span class="cell-hint" data-role="limit-hint"></span>
+        <div class="cell-stack compact-cell">
+          <input data-index="${index}" data-field="maxQuantity" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" />
+          <span class="cell-hint">Max active</span>
         </div>
       </td>
       <td>
-        <div class="cell-stack">
-          <input data-index="${index}" data-field="price" type="number" min="0" step="0.000001" inputmode="decimal" />
-          <span class="cell-hint" data-role="price-hint"></span>
+        <div class="cell-stack price-cell">
+          <input data-index="${index}" data-field="minBuyPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
+          <span class="cell-hint">${priceUnit}</span>
+        </div>
+      </td>
+      <td>
+        <div class="cell-stack price-cell">
+          <input data-index="${index}" data-field="maxBuyPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
+          <span class="cell-hint">${priceUnit}</span>
+        </div>
+      </td>
+      <td>
+        <div class="cell-stack price-cell">
+          <input data-index="${index}" data-field="minSellPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
+          <span class="cell-hint">${priceUnit}</span>
+        </div>
+      </td>
+      <td>
+        <div class="cell-stack price-cell">
+          <input data-index="${index}" data-field="maxSellPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
+          <span class="cell-hint">${priceUnit}</span>
         </div>
       </td>
       <td class="remove-cell">
@@ -455,11 +470,21 @@ function renderAssetRuleRows() {
     `;
 
     const assetSelect = tr.querySelector('[data-field="asset"]');
-    const sideSelect = tr.querySelector('[data-field="side"]');
-    const quantityInput = tr.querySelector('[data-field="quantity"]');
-    const limitInput = tr.querySelector('[data-field="limit"]');
-    const priceInput = tr.querySelector('[data-field="price"]');
+    const refillInput = tr.querySelector('[data-field="refill"]');
+    const fieldsByName = {
+      minQuantity: tr.querySelector('[data-field="minQuantity"]'),
+      maxQuantity: tr.querySelector('[data-field="maxQuantity"]'),
+      minBuyPrice: tr.querySelector('[data-field="minBuyPrice"]'),
+      maxBuyPrice: tr.querySelector('[data-field="maxBuyPrice"]'),
+      minSellPrice: tr.querySelector('[data-field="minSellPrice"]'),
+      maxSellPrice: tr.querySelector('[data-field="maxSellPrice"]'),
+    };
     const cancelOrderBtn = tr.querySelector('.cancel-order-btn');
+
+    const emptyAssetOption = document.createElement('option');
+    emptyAssetOption.value = '';
+    emptyAssetOption.textContent = 'Select asset...';
+    assetSelect.appendChild(emptyAssetOption);
 
     for (const option of options) {
       const opt = document.createElement('option');
@@ -468,45 +493,89 @@ function renderAssetRuleRows() {
       assetSelect.appendChild(opt);
     }
 
-    assetSelect.value = options.some((option) => option.value === row.asset) ? row.asset : options[0].value;
-    sideSelect.value = row.side === 'buy' ? 'buy' : 'sell';
-    quantityInput.value = row.quantity ?? '';
-    limitInput.value = row.limit ?? '';
-    priceInput.value = row.price ?? '';
-    updateRuleHint(tr, sideSelect.value);
+    assetSelect.value = options.some((option) => option.value === row.asset) ? row.asset : '';
+    refillInput.checked = row.refill !== false;
+    const formattedIntegerFields = new Set(['minQuantity', 'maxQuantity']);
+    for (const [field, input] of Object.entries(fieldsByName)) {
+      input.value = formattedIntegerFields.has(field)
+        ? formatIntegerWithSeparators(row[field] ?? '')
+        : row[field] ?? '';
+    }
 
     assetSelect.addEventListener('change', (event) => {
       assetRuleRows[index].asset = event.target.value;
+      renderAssetRuleRows();
     });
 
-    sideSelect.addEventListener('change', (event) => {
-      assetRuleRows[index].side = event.target.value;
-      updateRuleHint(tr, event.target.value);
+    refillInput.addEventListener('change', (event) => {
+      assetRuleRows[index].refill = event.target.checked;
     });
 
-    quantityInput.addEventListener('input', (event) => {
-      assetRuleRows[index].quantity = event.target.value;
-    });
+    for (const [field, input] of Object.entries(fieldsByName)) {
+      input.addEventListener('input', (event) => {
+        if (formattedIntegerFields.has(field)) {
+          const raw = event.target.value;
+          const cursor = event.target.selectionStart ?? raw.length;
+          const digitsBeforeCursor = raw.slice(0, cursor).replace(/[^\d-]/g, '').length;
+          const stripped = stripIntegerSeparators(raw);
+          assetRuleRows[index][field] = stripped;
+          const formatted = formatIntegerWithSeparators(stripped);
+          if (formatted !== raw) {
+            event.target.value = formatted;
+            let newCursor = 0;
+            let digitsSeen = 0;
+            for (let i = 0; i < formatted.length; i++) {
+              if (digitsSeen >= digitsBeforeCursor) {
+                newCursor = i;
+                break;
+              }
+              if (/\d/.test(formatted[i])) {
+                digitsSeen++;
+              }
+              newCursor = i + 1;
+            }
+            try {
+              event.target.setSelectionRange(newCursor, newCursor);
+            } catch {
+              // ignore: number/text inputs do not support setSelectionRange in some contexts
+            }
+          }
+          return;
+        }
+        assetRuleRows[index][field] = event.target.value;
+      });
 
-    limitInput.addEventListener('input', (event) => {
-      assetRuleRows[index].limit = event.target.value;
-    });
-
-    priceInput.addEventListener('input', (event) => {
-      assetRuleRows[index].price = event.target.value;
-    });
+      if (formattedIntegerFields.has(field)) {
+        input.addEventListener('change', (event) => {
+          const stripped = stripIntegerSeparators(event.target.value);
+          assetRuleRows[index][field] = stripped;
+          event.target.value = formatIntegerWithSeparators(stripped);
+        });
+      }
+    }
 
     cancelOrderBtn.addEventListener('click', async () => {
       const rowSnapshot = {
         asset: assetRuleRows[index]?.asset ?? '',
-        side: assetRuleRows[index]?.side === 'buy' ? 'buy' : 'sell',
       };
+
+      if (!rowSnapshot.asset) {
+        appendLog(`[${new Date().toISOString()}] [WARN] Select an asset before cancelling an order.`);
+        return;
+      }
+
+      const activeSides = [];
+      if (String(assetRuleRows[index]?.maxBuyPrice ?? '').trim()) activeSides.push('buy');
+      if (String(assetRuleRows[index]?.minSellPrice ?? '').trim()) activeSides.push('sell');
+      const sidesToCancel = activeSides.length ? activeSides : ['buy', 'sell'];
 
       cancelOrderBtn.disabled = true;
       try {
-        const result = await window.botApi.cancelOrder(rowSnapshot);
-        const status = result?.status ?? 'unknown';
-        appendLog(`[${new Date().toISOString()}] [INFO] Cancel order ${status} for ${rowSnapshot.asset} [${rowSnapshot.side}]`);
+        for (const side of sidesToCancel) {
+          const result = await window.botApi.cancelOrder({ ...rowSnapshot, side });
+          const status = result?.status ?? 'unknown';
+          appendLog(`[${new Date().toISOString()}] [INFO] Cancel order ${status} for ${rowSnapshot.asset} [${side}]`);
+        }
         await refreshBotStatus();
       } catch (err) {
         appendLog(`[${new Date().toISOString()}] [ERROR] ${err?.message || String(err)}`);
@@ -517,9 +586,6 @@ function renderAssetRuleRows() {
 
     tr.querySelector('.remove-row-btn').addEventListener('click', () => {
       assetRuleRows.splice(index, 1);
-      if (!assetRuleRows.length) {
-        assetRuleRows = buildDefaultAssetRuleRows(activeAssetRuleGroup).slice(0, 1);
-      }
       renderAssetRuleRows();
     });
 
@@ -601,6 +667,38 @@ function formatNumber(value, maximumFractionDigits = 6) {
     minimumFractionDigits: 0,
     maximumFractionDigits,
   }).format(value);
+}
+
+function formatIntegerWithSeparators(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return '';
+  }
+  const digitsOnly = text.replace(/[^\d-]/g, '');
+  if (!digitsOnly || digitsOnly === '-') {
+    return '';
+  }
+  const negative = digitsOnly.startsWith('-');
+  const unsigned = negative ? digitsOnly.slice(1) : digitsOnly;
+  if (!/^\d+$/.test(unsigned)) {
+    return '';
+  }
+  const grouped = new Intl.NumberFormat(undefined, { useGrouping: true }).format(Number(unsigned));
+  return negative ? `-${grouped}` : grouped;
+}
+
+function stripIntegerSeparators(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return '';
+  }
+  return text.replace(/[^\d-]/g, '');
 }
 
 function formatTimestamp(value) {
@@ -1027,21 +1125,30 @@ function normalizeAssetRulesForDiff(rows) {
     .map((row) => ({
       group: String(row?.group ?? '').trim(),
       asset: String(row?.asset ?? '').trim(),
-      side: row?.side === 'buy' ? 'buy' : 'sell',
-      quantity: String(row?.quantity ?? '').trim(),
-      limit: String(row?.limit ?? '').trim(),
-      price: String(row?.price ?? '').trim(),
+      refill: row?.refill === false || row?.refill === 'false' ? '0' : '1',
+      minQuantity: String(row?.minQuantity ?? '').replace(/[^\d-]/g, '').trim(),
+      maxQuantity: String(row?.maxQuantity ?? '').replace(/[^\d-]/g, '').trim(),
+      minBuyPrice: String(row?.minBuyPrice ?? '').trim(),
+      maxBuyPrice: String(row?.maxBuyPrice ?? '').trim(),
+      minSellPrice: String(row?.minSellPrice ?? '').trim(),
+      maxSellPrice: String(row?.maxSellPrice ?? '').trim(),
     }))
     .filter((row) => row.asset)
-    .sort((a, b) => `${a.group}|${a.asset}|${a.side}`.localeCompare(`${b.group}|${b.asset}|${b.side}`));
+    .sort((a, b) => `${a.group}|${a.asset}`.localeCompare(`${b.group}|${b.asset}`));
 }
 
 function getChangedAssets(previousRows, nextRows) {
   const prevMap = new Map(
-    normalizeAssetRulesForDiff(previousRows).map((row) => [`${row.group}|${row.asset}|${row.side}`, `${row.quantity}|${row.limit}|${row.price}`])
+    normalizeAssetRulesForDiff(previousRows).map((row) => [
+      `${row.group}|${row.asset}`,
+      `${row.refill}|${row.minQuantity}|${row.maxQuantity}|${row.minBuyPrice}|${row.maxBuyPrice}|${row.minSellPrice}|${row.maxSellPrice}`,
+    ])
   );
   const nextMap = new Map(
-    normalizeAssetRulesForDiff(nextRows).map((row) => [`${row.group}|${row.asset}|${row.side}`, `${row.quantity}|${row.limit}|${row.price}`])
+    normalizeAssetRulesForDiff(nextRows).map((row) => [
+      `${row.group}|${row.asset}`,
+      `${row.refill}|${row.minQuantity}|${row.maxQuantity}|${row.minBuyPrice}|${row.maxBuyPrice}|${row.minSellPrice}|${row.maxSellPrice}`,
+    ])
   );
 
   const touched = new Set();
@@ -1248,18 +1355,20 @@ updateConfirmBtn.addEventListener('click', async () => {
 });
 
 addRuleRowBtn.addEventListener('click', () => {
-  const firstOption = getResourceOptions(activeAssetRuleGroup)[0];
-  if (!firstOption) {
+  if (!getResourceOptions(activeAssetRuleGroup).length) {
     appendLog(`[${new Date().toISOString()}] [WARN] Asset registry unavailable. Save a valid Aephia API Key first.`);
     return;
   }
   assetRuleRows.push({
     group: activeAssetRuleGroup,
-    asset: firstOption.value,
-    side: 'sell',
-    quantity: '',
-    limit: '',
-    price: '',
+    asset: '',
+    refill: true,
+    minQuantity: '',
+    maxQuantity: '',
+    minBuyPrice: '',
+    maxBuyPrice: '',
+    minSellPrice: '',
+    maxSellPrice: '',
   });
   renderAssetRuleRows();
 });
