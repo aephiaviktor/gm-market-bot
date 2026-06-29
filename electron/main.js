@@ -29,6 +29,7 @@ const GITHUB_MAIN_ARCHIVE_URL = `https://github.com/${GITHUB_REPO}/archive/refs/
 const APP_DISPLAY_NAME = 'GM Market Bot';
 const APP_USER_MODEL_ID = 'com.aephia.gm-market-bot';
 const RPC_LIMITER_UPDATED_BY = 'GM Market Bot';
+const APP_VERSION = packageJson.version || 'unknown';
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_USER_MODEL_ID);
@@ -39,7 +40,6 @@ function getWindowIconPath() {
 }
 
 function installApplicationMenu() {
-  const appVersion = packageJson.version || 'unknown';
   const menu = Menu.buildFromTemplate([
     {
       label: 'File',
@@ -63,7 +63,7 @@ function installApplicationMenu() {
             dialog.showMessageBox(mainWindow || undefined, {
               type: 'info',
               title: `About ${APP_DISPLAY_NAME}`,
-              message: `${APP_DISPLAY_NAME} v${appVersion}`,
+              message: `${APP_DISPLAY_NAME} v${APP_VERSION}`,
               detail: `Electron ${process.versions.electron}\nChrome ${process.versions.chrome}\nNode ${process.versions.node}`,
               buttons: ['OK'],
             });
@@ -540,6 +540,7 @@ async function getEffectiveBotInputConfig(options = {}) {
 
 function getEmptyStatusSnapshot() {
   return {
+    version: APP_VERSION,
     running: false,
     wallet: '—',
     solBalance: 0,
@@ -653,6 +654,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: [`--gm-market-bot-version=${APP_VERSION}`],
     },
   });
 

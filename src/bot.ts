@@ -38,7 +38,9 @@ const RPC_LIMITER_SLOW_WAIT_LOG_MS = 100;
 const RPC_LIMITER_WAIT_LOG_THROTTLE_MS = 60000;
 const SHIP_BUY_OUTBID_PCT = 0.005;
 const CREW_PACK_OUTBID_PCT = 0.005;
-const APP_VERSION = '0.3.3';
+// Keep this as a runtime require so TypeScript keeps emitting dist/bot.js.
+const packageJson = require('../package.json') as { version?: string };
+const APP_VERSION = packageJson.version || 'unknown';
 const SHIP_PART_SUFFIX = ' (ship parts)';
 const SHIP_START_NAME = 'Busan Pulse';
 const SHIP_END_NAME = 'Rainbow Phi';
@@ -477,6 +479,7 @@ export type BotRuleHealthStatus = {
 };
 
 export type BotStatusSnapshot = {
+  version: string;
   running: boolean;
   wallet: string;
   solBalance: number;
@@ -1428,6 +1431,7 @@ export class GmMarketBot {
     const ruleHealth = this.buildRuleHealthSnapshot(openOrders);
 
     const snapshot = {
+      version: APP_VERSION,
       running: this.running,
       wallet,
       solBalance,
