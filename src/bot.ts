@@ -673,7 +673,11 @@ function isRunnableAssetRuleInput(rule: AssetRuleInput | null | undefined): rule
   }
 
   if (isStrategyAssetRuleInput(rule)) {
-    return Boolean(String(rule?.minQuantity ?? '').trim() && String(rule?.maxQuantity ?? '').trim());
+    const hasMinQuantity = Boolean(String(rule?.minQuantity ?? '').trim());
+    const hasSellPrice = Boolean(String(rule?.minSellPrice ?? '').trim());
+    const hasBuyPrice = Boolean(String(rule?.maxBuyPrice ?? '').trim());
+    const hasMaxQuantity = Boolean(String(rule?.maxQuantity ?? '').trim());
+    return hasMinQuantity && (hasSellPrice || (hasBuyPrice && hasMaxQuantity));
   }
 
   return Boolean(
@@ -729,8 +733,10 @@ function parseStrategyAssetRule(input: AssetRuleInput, index?: number): AssetRul
   const asset = parseNonEmptyString(input.asset, label + '.asset');
   const group = normalizeAssetRuleGroup(input.group, asset);
   const minQuantity = parseRuleQuantity(input.minQuantity, label + '.minQuantity');
-  const maxQuantity = parseRuleQuantity(input.maxQuantity, label + '.maxQuantity');
-  if (maxQuantity < minQuantity) {
+  const maxQuantity = String(input.maxQuantity ?? '').trim()
+    ? parseRuleQuantity(input.maxQuantity, label + '.maxQuantity')
+    : null;
+  if (maxQuantity !== null && maxQuantity < minQuantity) {
     throw new Error(`${label}.maxQuantity must be greater than or equal to minQuantity`);
   }
 
@@ -741,7 +747,7 @@ function parseStrategyAssetRule(input: AssetRuleInput, index?: number): AssetRul
   const maxSellPrice = parseOptionalRulePrice(input.maxSellPrice, label + '.maxSellPrice');
   const rules: AssetRuleConfig[] = [];
 
-  if (maxBuyPrice !== null) {
+  if (maxBuyPrice !== null && maxQuantity !== null) {
     if (minBuyPrice !== null && minBuyPrice > maxBuyPrice) {
       throw new Error(`${label}.minBuyPrice must be less than or equal to maxBuyPrice`);
     }
