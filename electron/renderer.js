@@ -240,6 +240,10 @@ function getAllResourceOptions() {
   return parseResources(assetRegistryResourceList);
 }
 
+function getAssetLabel(asset) {
+  return getAllResourceOptions().find((option) => option.value === asset)?.label ?? '';
+}
+
 function sliceOptionsByNameRange(options, startName, endName) {
   const startIndex = options.findIndex((option) => option.label === startName);
   const endIndex = options.findIndex((option) => option.label === endName);
