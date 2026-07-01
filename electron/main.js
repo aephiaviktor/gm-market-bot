@@ -79,6 +79,95 @@ function getAppRoot() {
   return path.resolve(__dirname, '..');
 }
 
+function serializeCrashValue(value) {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+      code: value.code,
+    };
+  }
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return String(value);
+    }
+  }
+  return value;
+}
+
+function logCrashEvent(type, details = {}) {
+  const logPath = path.join(getAppRoot(), 'analysis', 'crash-events.jsonl');
+  const event = {
+    timestamp: new Date().toISOString(),
+    app: APP_DISPLAY_NAME,
+    appId: APP_USER_MODEL_ID,
+    profile: null,
+    pid: process.pid,
+    ppid: process.ppid,
+    platform: process.platform,
+    versions: {
+      app: APP_VERSION,
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+    },
+    type,
+    details: serializeCrashValue(details),
+  };
+  try {
+    fsSync.mkdirSync(path.dirname(logPath), { recursive: true });
+    fsSync.appendFileSync(logPath, `${JSON.stringify(event)}\n`, 'utf8');
+  } catch (err) {
+    console.error('[GmMarketBot] failed to write crash event:', err);
+  }
+  console.error('[GmMarketBot] crash event:', JSON.stringify({ type, details: event.details }));
+}
+
+function attachWindowCrashLogging(win) {
+  if (!win || !win.webContents) return;
+  win.webContents.on('render-process-gone', (_event, details) => {
+    logCrashEvent('window-render-process-gone', {
+      title: win.getTitle(),
+      url: win.webContents.getURL(),
+      details,
+    });
+  });
+  win.webContents.on('unresponsive', () => {
+    logCrashEvent('window-unresponsive', {
+      title: win.getTitle(),
+      url: win.webContents.getURL(),
+    });
+  });
+}
+
+function installCrashEventLogging() {
+  process.on('uncaughtExceptionMonitor', (error) => {
+    logCrashEvent('uncaughtExceptionMonitor', error);
+  });
+  process.on('unhandledRejection', (reason) => {
+    logCrashEvent('unhandledRejection', reason);
+  });
+  process.on('exit', (code) => {
+    logCrashEvent('process-exit', { code });
+  });
+  app.on('render-process-gone', (_event, webContents, details) => {
+    logCrashEvent('app-render-process-gone', {
+      id: webContents?.id,
+      url: typeof webContents?.getURL === 'function' ? webContents.getURL() : '',
+      details,
+    });
+  });
+  app.on('child-process-gone', (_event, details) => {
+    logCrashEvent('child-process-gone', details);
+  });
+  app.on('gpu-process-crashed', (_event, killed) => {
+    logCrashEvent('gpu-process-crashed', { killed });
+  });
+}
+
 async function readPackageVersion() {
   const raw = await fs.readFile(path.join(getAppRoot(), 'package.json'), 'utf8');
   return JSON.parse(raw).version;
@@ -660,9 +749,12 @@ function createWindow() {
   if (typeof mainWindow.setIcon === 'function') {
     mainWindow.setIcon(iconPath);
   }
+  attachWindowCrashLogging(mainWindow);
 
   mainWindow.loadFile(path.join(__dirname, 'renderer.html'));
 }
+
+installCrashEventLogging();
 
 ipcMain.handle('logs:get', async () => recentLogs);
 
