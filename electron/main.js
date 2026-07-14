@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
@@ -9,6 +9,13 @@ const packageJson = require('../package.json');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
+
+// Disable Chromium background throttling. GM Market Bot is a 24/7
+// automation process and must remain responsive even when its window
+// is covered, minimized, or otherwise inactive on Windows.
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 
 const { resolvePaths } = require('rpc_limiter');
 const { readState: readRpcLimiterState, writeStateSync: writeRpcLimiterStateSync, bumpRevision: bumpRpcLimiterRevision } = require('rpc_limiter/dist/state');
@@ -743,6 +750,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       additionalArguments: [`--gm-market-bot-version=${APP_VERSION}`],
+      backgroundThrottling: false,
     },
   });
 
@@ -872,6 +880,9 @@ ipcMain.handle('updates:download-and-restart', async () => {
 });
 
 app.whenReady().then(async () => {
+  const powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+  console.log(`[GM] prevent-app-suspension blocker=${powerSaveBlockerId} active=${powerSaveBlocker.isStarted(powerSaveBlockerId)}`)
+
   installApplicationMenu();
   createWindow();
 
