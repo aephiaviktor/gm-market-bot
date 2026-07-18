@@ -303,6 +303,7 @@ export type AssetRuleInput = {
   quantity?: string | number | null;
   limit?: string | number | null;
   price?: string | number | null;
+  enabled?: boolean | string | number | null;
   refill?: boolean | string | number | null;
   minQuantity?: string | number | null;
   maxQuantity?: string | number | null;
@@ -319,7 +320,7 @@ export type AssetRuleConfig = {
   quantity: number;
   limit: number | null;
   price: number;
-  refill: boolean;
+  enabled: boolean;
   minQuantity: number;
   minPrice: number | null;
   maxPrice: number | null;
@@ -724,7 +725,7 @@ function parseLegacyAssetRule(input: AssetRuleInput, index?: number): AssetRuleC
     quantity,
     limit,
     price,
-    refill: true,
+    enabled: parseOptionalBoolean(input.enabled ?? input.refill, true),
     minQuantity: side === 'buy' ? 1 : quantity,
     minPrice: null,
     maxPrice: null,
@@ -743,7 +744,7 @@ function parseStrategyAssetRule(input: AssetRuleInput, index?: number): AssetRul
     throw new Error(`${label}.maxQuantity must be greater than or equal to minQuantity`);
   }
 
-  const refill = parseOptionalBoolean(input.refill, true);
+  const enabled = parseOptionalBoolean(input.enabled ?? input.refill, true);
   const minBuyPrice = parseOptionalRulePrice(input.minBuyPrice, label + '.minBuyPrice');
   const maxBuyPrice = parseOptionalRulePrice(input.maxBuyPrice, label + '.maxBuyPrice');
   const minSellPrice = parseOptionalRulePrice(input.minSellPrice, label + '.minSellPrice');
@@ -761,7 +762,7 @@ function parseStrategyAssetRule(input: AssetRuleInput, index?: number): AssetRul
       quantity: maxQuantity,
       limit: maxQuantity,
       price: maxBuyPrice,
-      refill,
+      enabled,
       minQuantity,
       minPrice: minBuyPrice,
       maxPrice: maxBuyPrice,
@@ -779,7 +780,7 @@ function parseStrategyAssetRule(input: AssetRuleInput, index?: number): AssetRul
       quantity: minQuantity,
       limit: maxQuantity,
       price: minSellPrice,
-      refill,
+      enabled,
       minQuantity,
       minPrice: minSellPrice,
       maxPrice: maxSellPrice,
@@ -1948,6 +1949,14 @@ export class GmMarketBot {
 
     await this.detectFills(resource, 'sell', myOrders, cancelledIds);
 
+    if (rule && !rule.enabled) {
+      for (const order of myOrders) {
+        await this.cancelOrder(order, resource, 'sell', cancelledIds);
+      }
+      this.logger.info(`${resource.name} sell rule is disabled. Existing sell orders cancelled; no new order will be placed.`);
+      return;
+    }
+
     const walletBalance = await this.getWalletBalanceForMint(resource.mint, resource.name);
     const relevantSellQuantity = getRelevantOrderThreshold(minSellQuantity, this.config.relevantSellOrderPct);
     const targetPrice = this.getTargetSellPrice(allOrders, minPrice, relevantSellQuantity, outbidOptions);
@@ -1997,8 +2006,7 @@ export class GmMarketBot {
       typeof limit === 'number' &&
       remainingSellAllowance > 0 &&
       freeWalletQuantity >= remainingSellAllowance;
-    const refillEnabled = rule?.refill !== false;
-    const shouldResizeForWallet = refillEnabled && (addableWalletQuantity >= minSellQuantity || canTopUpToSellLimit);
+    const shouldResizeForWallet = addableWalletQuantity >= minSellQuantity || canTopUpToSellLimit;
     const shouldResizeForLimit = typeof limit === 'number' && activeQuantity > limit;
     const priceDelta = Math.abs(activeOrder.uiPrice - targetPrice);
     const shouldReplaceForPrice = priceDelta >= ORDER_PRICE_EPSILON;
@@ -2061,6 +2069,14 @@ export class GmMarketBot {
     }
 
     await this.detectFills(resource, 'buy', myOrders, cancelledIds);
+
+    if (!rule.enabled) {
+      for (const order of myOrders) {
+        await this.cancelOrder(order, resource, 'buy', cancelledIds);
+      }
+      this.logger.info(`${resource.name} buy rule is disabled. Existing buy orders cancelled; no new order will be placed.`);
+      return;
+    }
 
     const maxBuyQuantity = rule.quantity;
     const maxBuyPrice = rule.price;

@@ -420,7 +420,9 @@ function normalizeAssetRules(rows) {
       limit,
       price,
       group: String(row?.group ?? ''),
-      refill: row?.refill === false || row?.refill === 'false' ? false : true,
+      enabled: row?.enabled !== undefined
+        ? row.enabled !== false && row.enabled !== 'false'
+        : row?.refill !== false && row?.refill !== 'false',
       minQuantity: String(row?.minQuantity ?? (isStrategyRow ? '' : side === 'sell' ? quantity : '1')).replace(/[^\d-]/g, ''),
       maxQuantity: String(row?.maxQuantity ?? (isStrategyRow ? '' : limit || quantity)).replace(/[^\d-]/g, ''),
       minBuyPrice: String(row?.minBuyPrice ?? ''),
