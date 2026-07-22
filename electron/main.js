@@ -6,6 +6,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const lockfile = require('proper-lockfile');
 const packageJson = require('../package.json');
+const stableIcon = require('./lib/stable-icon');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
@@ -41,8 +42,17 @@ if (process.platform === 'win32') {
   app.setAppUserModelId(APP_USER_MODEL_ID);
 }
 
+// Keep the Windows icon at a stable path outside the app tree so Shell can
+// retain it reliably across supervised crash restarts and app updates.
+const WINDOW_ICON_STABLE = stableIcon.init({
+  appKey: 'gm-market-bot',
+  appUserModelId: APP_USER_MODEL_ID,
+  sourceIconPath: path.join(__dirname, 'assets', 'market_bot_icon.ico'),
+});
+
 function getWindowIconPath() {
-  return path.join(__dirname, 'assets', process.platform === 'win32' ? 'market_bot_icon.ico' : 'market_bot_icon.png');
+  if (process.platform === 'win32') return WINDOW_ICON_STABLE;
+  return path.join(__dirname, 'assets', 'market_bot_icon.png');
 }
 
 function installApplicationMenu() {
