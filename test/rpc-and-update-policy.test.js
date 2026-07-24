@@ -7,7 +7,7 @@ const {
   getRpcLimiterBucketName,
   isRpcRateLimitError,
 } = require('../dist/bot');
-const { compareVersions, normalizeVersion } = require('../electron/update-policy');
+const { compareVersions, normalizeVersion, scheduleRelaunch } = require('../electron/update-policy');
 
 function createLimiterSpy() {
   const calls = [];
@@ -79,4 +79,22 @@ test('updater version policy handles prefixes and segment lengths', () => {
   assert.equal(compareVersions('0.3.12', '0.3.12'), 0);
   assert.equal(compareVersions('0.3.11', '0.3.12'), -1);
   assert.equal(compareVersions('0.3.12.1', '0.3.12'), 1);
+});
+
+test('updater acknowledges success before scheduling relaunch and exit', () => {
+  const calls = [];
+  const app = {
+    relaunch() { calls.push('relaunch'); },
+    exit(code) { calls.push(['exit', code]); },
+  };
+  let scheduled = null;
+
+  scheduleRelaunch(app, 750, (handler, delay) => {
+    scheduled = { handler, delay };
+  });
+
+  assert.equal(scheduled.delay, 750);
+  assert.deepEqual(calls, []);
+  scheduled.handler();
+  assert.deepEqual(calls, ['relaunch', ['exit', 0]]);
 });

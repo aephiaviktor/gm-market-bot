@@ -15,4 +15,11 @@ function compareVersions(a, b) {
   return 0;
 }
 
-module.exports = { compareVersions, normalizeVersion };
+function scheduleRelaunch(app, delayMs = 750, schedule = setTimeout) {
+  schedule(() => {
+    app.relaunch();
+    app.exit(0);
+  }, delayMs);
+}
+
+module.exports = { compareVersions, normalizeVersion, scheduleRelaunch };

@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 const lockfile = require('proper-lockfile');
 const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
-const { compareVersions, normalizeVersion } = require('./update-policy');
+const { compareVersions, normalizeVersion, scheduleRelaunch } = require('./update-policy');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
@@ -304,8 +304,7 @@ async function downloadUpdateAndRestart() {
   await runCommand('npm', ['install'], { cwd: getAppRoot() });
   await runCommand('npm', ['run', 'build'], { cwd: getAppRoot() });
 
-  app.relaunch();
-  app.exit(0);
+  scheduleRelaunch(app);
   return { updated: true, currentVersion, latestVersion: latest.version };
 }
 

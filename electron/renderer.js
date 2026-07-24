@@ -1352,7 +1352,11 @@ updateConfirmBtn.addEventListener('click', async () => {
     `[${new Date().toISOString()}] [INFO] Downloading GM Market Bot v${availableUpdate.latestVersion} and restarting...`,
   );
   try {
-    await window.botApi.downloadUpdateAndRestart();
+    const result = await window.botApi.downloadUpdateAndRestart();
+    if (result?.updated) {
+      updateMessageEl.textContent = `GM Market Bot v${result.latestVersion} installed. Restarting now...`;
+      appendLog(`[${new Date().toISOString()}] [INFO] GM Market Bot v${result.latestVersion} installed. Restarting now...`);
+    }
   } catch (err) {
     updateCancelBtn.disabled = false;
     renderUpdateModalState(availableUpdate, err);
