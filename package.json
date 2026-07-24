@@ -1,11 +1,12 @@
 {
   "name": "gm-market-bot",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "",
   "main": "electron/main.js",
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test",
     "start": "npm run build && node dist/index.js",
     "dev:cli": "ts-node src/index.ts",
     "start:electron": "npm run build && electron .",

@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const lockfile = require('proper-lockfile');
 const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
+const { compareVersions, normalizeVersion } = require('./update-policy');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
@@ -188,21 +189,6 @@ function installCrashEventLogging() {
 async function readPackageVersion() {
   const raw = await fs.readFile(path.join(getAppRoot(), 'package.json'), 'utf8');
   return JSON.parse(raw).version;
-}
-
-function normalizeVersion(value) {
-  return String(value || '').trim().replace(/^v/i, '');
-}
-
-function compareVersions(a, b) {
-  const left = normalizeVersion(a).split('.').map((part) => Number.parseInt(part, 10) || 0);
-  const right = normalizeVersion(b).split('.').map((part) => Number.parseInt(part, 10) || 0);
-  const length = Math.max(left.length, right.length);
-  for (let i = 0; i < length; i++) {
-    if ((left[i] || 0) > (right[i] || 0)) return 1;
-    if ((left[i] || 0) < (right[i] || 0)) return -1;
-  }
-  return 0;
 }
 
 async function fetchGithubJson(url) {

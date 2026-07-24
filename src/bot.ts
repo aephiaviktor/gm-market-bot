@@ -128,33 +128,40 @@ function getErrorText(error: unknown): string {
   }
 }
 
-function isRpcRateLimitError(error: unknown): boolean {
+export function isRpcRateLimitError(error: unknown): boolean {
   const text = getErrorText(error).toLowerCase();
   return text.includes('429') || text.includes('too many requests') || text.includes('rate limit');
 }
 
-async function callRpcWithRateLimitRetry<T>(
+export function getRpcLimiterBucketName(method: string): 'rpc:shared' | 'tx:shared' {
+  return method === 'sendRawTransaction' ? 'tx:shared' : 'rpc:shared';
+}
+
+export async function callRpcWithRateLimitRetry<T>(
   label: string,
   invoke: () => Promise<T>,
   limiter: RpcRequestRateLimiter,
   logger: BotLogger,
   bucketName: 'rpc:shared' | 'tx:shared' = 'rpc:shared',
   method: string = label,
+  testOptions?: { retryDelaysMs?: number[]; sleepFn?: (ms: number) => Promise<void> },
 ): Promise<T> {
+  const retryDelaysMs = testOptions?.retryDelaysMs ?? RPC_RATE_LIMIT_RETRY_DELAYS_MS;
+  const sleepFn = testOptions?.sleepFn ?? sleep;
   for (let attempt = 0; ; attempt++) {
     try {
       await limiter.wait(label, bucketName, method);
       return await invoke();
     } catch (error) {
-      const retryDelayMs = RPC_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      const retryDelayMs = retryDelaysMs[attempt];
       if (!isRpcRateLimitError(error) || retryDelayMs === undefined) {
         throw error;
       }
 
       logger.warn(
-        `RPC rate limit for ${label}; retrying in ${retryDelayMs}ms (${attempt + 1}/${RPC_RATE_LIMIT_RETRY_DELAYS_MS.length}).`,
+        `RPC rate limit for ${label}; retrying in ${retryDelayMs}ms (${attempt + 1}/${retryDelaysMs.length}).`,
       );
-      await sleep(retryDelayMs);
+      await sleepFn(retryDelayMs);
     }
   }
 }
@@ -194,7 +201,7 @@ function createFailoverConnection(
       return async (...args: unknown[]) => {
         const method = String(prop);
         const label = `Connection.${String(prop)}()`;
-        const bucketName = prop === 'sendRawTransaction' ? 'tx:shared' : 'rpc:shared';
+        const bucketName = getRpcLimiterBucketName(method);
         const cacheKey = getConnectionLookupCacheKey(method, args);
 
         // Per-cycle getSlot() cache: return the cached slot if it's still
@@ -1257,6 +1264,65 @@ function getRelevantOrderThreshold(quantity: number, pct: number): number {
   return Math.max(1, Math.ceil(quantity * (pct / 100)));
 }
 
+export function calculateTargetSellPrice(
+  allSellOrders: Order[],
+  walletOwner: string,
+  minPrice: number,
+  minRelevantQuantity: number,
+  options?: SellPriceOptions,
+): number {
+  const externalSellOrders = allSellOrders
+    .filter((order) => order.owner !== walletOwner && getOrderBookQuantity(order) >= minRelevantQuantity)
+    .sort((a, b) => a.uiPrice - b.uiPrice);
+
+  if (externalSellOrders.length === 0) {
+    return clampPrice(options?.maxPrice ?? minPrice, minPrice, options?.maxPrice ?? minPrice);
+  }
+
+  const bestSell = externalSellOrders[0];
+  if (bestSell.uiPrice >= minPrice) {
+    return clampPrice(Math.max(minPrice, applySellUndercut(bestSell.uiPrice, options)), minPrice, options?.maxPrice);
+  }
+
+  const nextHigherSell = externalSellOrders.find((order) => order.uiPrice >= minPrice);
+  return nextHigherSell
+    ? clampPrice(Math.max(minPrice, applySellUndercut(nextHigherSell.uiPrice, options)), minPrice, options?.maxPrice)
+    : clampPrice(options?.maxPrice ?? minPrice, minPrice, options?.maxPrice ?? minPrice);
+}
+
+export function calculateTargetBuyPrice(
+  allBuyOrders: Order[],
+  walletOwner: string,
+  maxBuyPrice: number,
+  minRelevantQuantity: number,
+  options?: BuyPriceOptions,
+): number {
+  const externalBuyOrders = allBuyOrders
+    .filter((order) => order.owner !== walletOwner && getOrderBookQuantity(order) >= minRelevantQuantity)
+    .sort((a, b) => b.uiPrice - a.uiPrice);
+
+  if (externalBuyOrders.length === 0) {
+    return clampPrice(options?.minPrice ?? maxBuyPrice, options?.minPrice ?? null, maxBuyPrice);
+  }
+
+  const bestBuy = externalBuyOrders[0];
+  if (bestBuy.uiPrice < maxBuyPrice - ORDER_PRICE_EPSILON) {
+    return clampPrice(Math.min(maxBuyPrice, applyBuyOutbid(bestBuy.uiPrice, options)), options?.minPrice ?? null, maxBuyPrice);
+  }
+
+  if (Math.abs(bestBuy.uiPrice - maxBuyPrice) < ORDER_PRICE_EPSILON) {
+    const nextLowerBuy = externalBuyOrders.find((order) => order.uiPrice < maxBuyPrice - ORDER_PRICE_EPSILON);
+    return nextLowerBuy
+      ? clampPrice(Math.min(maxBuyPrice, applyBuyOutbid(nextLowerBuy.uiPrice, options)), options?.minPrice ?? null, maxBuyPrice)
+      : clampPrice(maxBuyPrice, options?.minPrice ?? null, maxBuyPrice);
+  }
+
+  const nextLowerBuy = externalBuyOrders.find((order) => order.uiPrice <= maxBuyPrice);
+  return nextLowerBuy
+    ? clampPrice(Math.min(maxBuyPrice, applyBuyOutbid(nextLowerBuy.uiPrice, options)), options?.minPrice ?? null, maxBuyPrice)
+    : clampPrice(options?.minPrice ?? maxBuyPrice, options?.minPrice ?? null, maxBuyPrice);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1847,31 +1913,13 @@ export class GmMarketBot {
     minRelevantQuantity: number,
     options?: SellPriceOptions,
   ): number {
-    const externalSellOrders = allSellOrders
-      .filter(
-        (o) =>
-          o.owner !== this.wallet.publicKey.toBase58() &&
-          getOrderBookQuantity(o) >= minRelevantQuantity,
-      )
-      .sort((a, b) => a.uiPrice - b.uiPrice);
-
-    if (externalSellOrders.length === 0) {
-      return clampPrice(options?.maxPrice ?? minPrice, minPrice, options?.maxPrice ?? minPrice);
-    }
-
-    const bestSell = externalSellOrders[0];
-
-    if (bestSell.uiPrice >= minPrice) {
-      return clampPrice(Math.max(minPrice, applySellUndercut(bestSell.uiPrice, options)), minPrice, options?.maxPrice);
-    }
-
-    const nextHigherSell = externalSellOrders.find((o) => o.uiPrice >= minPrice);
-
-    if (nextHigherSell) {
-      return clampPrice(Math.max(minPrice, applySellUndercut(nextHigherSell.uiPrice, options)), minPrice, options?.maxPrice);
-    }
-
-    return clampPrice(options?.maxPrice ?? minPrice, minPrice, options?.maxPrice ?? minPrice);
+    return calculateTargetSellPrice(
+      allSellOrders,
+      this.wallet.publicKey.toBase58(),
+      minPrice,
+      minRelevantQuantity,
+      options,
+    );
   }
 
   private getTargetBuyPrice(
@@ -1880,39 +1928,13 @@ export class GmMarketBot {
     minRelevantQuantity: number,
     options?: BuyPriceOptions,
   ): number {
-    const externalBuyOrders = allBuyOrders
-      .filter(
-        (o) =>
-          o.owner !== this.wallet.publicKey.toBase58() &&
-          getOrderBookQuantity(o) >= minRelevantQuantity,
-      )
-      .sort((a, b) => b.uiPrice - a.uiPrice);
-
-    if (externalBuyOrders.length === 0) {
-      return clampPrice(options?.minPrice ?? maxBuyPrice, options?.minPrice ?? null, maxBuyPrice);
-    }
-
-    const bestBuy = externalBuyOrders[0];
-
-    if (bestBuy.uiPrice < maxBuyPrice - ORDER_PRICE_EPSILON) {
-      return clampPrice(Math.min(maxBuyPrice, applyBuyOutbid(bestBuy.uiPrice, options)), options?.minPrice ?? null, maxBuyPrice);
-    }
-
-    if (Math.abs(bestBuy.uiPrice - maxBuyPrice) < ORDER_PRICE_EPSILON) {
-      const nextLowerBuy = externalBuyOrders.find((o) => o.uiPrice < maxBuyPrice - ORDER_PRICE_EPSILON);
-      if (nextLowerBuy) {
-        return clampPrice(Math.min(maxBuyPrice, applyBuyOutbid(nextLowerBuy.uiPrice, options)), options?.minPrice ?? null, maxBuyPrice);
-      }
-      return clampPrice(maxBuyPrice, options?.minPrice ?? null, maxBuyPrice);
-    }
-
-    const nextLowerBuy = externalBuyOrders.find((o) => o.uiPrice <= maxBuyPrice);
-
-    if (nextLowerBuy) {
-      return clampPrice(Math.min(maxBuyPrice, applyBuyOutbid(nextLowerBuy.uiPrice, options)), options?.minPrice ?? null, maxBuyPrice);
-    }
-
-    return clampPrice(options?.minPrice ?? maxBuyPrice, options?.minPrice ?? null, maxBuyPrice);
+    return calculateTargetBuyPrice(
+      allBuyOrders,
+      this.wallet.publicKey.toBase58(),
+      maxBuyPrice,
+      minRelevantQuantity,
+      options,
+    );
   }
 
   private async readMarketOrderSnapshot(resource: ResourceConfig): Promise<MarketOrderSnapshot> {
