@@ -166,6 +166,19 @@ export async function callRpcWithRateLimitRetry<T>(
   }
 }
 
+export async function callRpcWithFallback<T>(
+  invokePrimary: () => Promise<T>,
+  invokeFallback: () => Promise<T>,
+  onPrimaryError?: (error: unknown) => void,
+): Promise<T> {
+  try {
+    return await invokePrimary();
+  } catch (error) {
+    onPrimaryError?.(error);
+    return await invokeFallback();
+  }
+}
+
 function createFailoverConnection(
   primaryUrl: string,
   fallbackUrl: string | undefined,
@@ -224,31 +237,29 @@ function createFailoverConnection(
           }
         }
 
-        const resultPromise = (async () => {
-          try {
-            return await callRpcWithRateLimitRetry(
-              label,
-              () => primaryValue.apply(target, args),
-              limiter,
-              logger,
-              bucketName,
-              method,
-            );
-          } catch (error) {
-            if (!fallback || typeof fallbackValue !== 'function') {
-              throw error;
-            }
-            logger.warn(`Primary RPC failed for Connection.${String(prop)}(), trying fallback RPC.`, error);
-            return await callRpcWithRateLimitRetry(
+        const invokePrimary = () => callRpcWithRateLimitRetry(
+          label,
+          () => primaryValue.apply(target, args),
+          limiter,
+          logger,
+          bucketName,
+          method,
+        );
+
+        const resultPromise = !fallback || typeof fallbackValue !== 'function'
+          ? invokePrimary()
+          : callRpcWithFallback(
+            invokePrimary,
+            () => callRpcWithRateLimitRetry(
               `fallback Connection.${String(prop)}()`,
               () => fallbackValue.apply(fallback, args),
               limiter,
               logger,
               bucketName,
               method,
-            );
-          }
-        })();
+            ),
+            (error) => logger.warn(`Primary RPC failed for Connection.${String(prop)}(), trying fallback RPC.`, error),
+          );
 
         // Populate the per-cycle getSlot() cache on success so subsequent
         // calls inside the same runCycle reuse the slot context.
@@ -1141,7 +1152,7 @@ function groupRulesByAsset(rules: AssetRuleConfig[]): Map<string, GroupedAssetRu
   return grouped;
 }
 
-function normalizeLoadedState(parsed: unknown, trackedResources: ResourceConfig[]): BotState {
+export function normalizeLoadedState(parsed: unknown, trackedResources: ResourceConfig[]): BotState {
   if (!parsed || typeof parsed !== 'object') {
     return {};
   }
@@ -1239,6 +1250,74 @@ function getOrderTrackedQuantity(order: Order): number {
   }
 
   return getOrderRemainingQuantity(order);
+}
+
+export type OrderFillEvent =
+  | {
+      kind: 'partial';
+      orderId: string;
+      meta: OrderSnapshot;
+      filledDelta: number;
+      remaining: number;
+    }
+  | {
+      kind: 'full';
+      orderId: string;
+      meta: OrderSnapshot;
+      remaining: 0;
+    };
+
+export function classifyOrderFillEvents(
+  previousOpenOrders: Record<string, OrderSnapshot>,
+  currentOrders: Order[],
+  suppressedOrderIds: ReadonlySet<string>,
+): OrderFillEvent[] {
+  const currentById = new Map(currentOrders.map((order) => [order.id, order]));
+  const events: OrderFillEvent[] = [];
+
+  for (const [orderId, meta] of Object.entries(previousOpenOrders)) {
+    const currentOrder = currentById.get(orderId);
+    if (currentOrder) {
+      const currentRemaining = getOrderRemainingQuantity(currentOrder);
+      if (currentRemaining < meta.remaining) {
+        events.push({
+          kind: 'partial',
+          orderId,
+          meta,
+          filledDelta: meta.remaining - currentRemaining,
+          remaining: currentRemaining,
+        });
+      }
+      continue;
+    }
+
+    if (!suppressedOrderIds.has(orderId)) {
+      events.push({ kind: 'full', orderId, meta, remaining: 0 });
+    }
+  }
+
+  return events;
+}
+
+export function getRuleExecutionPolicy(
+  rule: Pick<AssetRuleConfig, 'enabled'>,
+  currentOrders: Array<Pick<Order, 'id'>>,
+): { cancelOrderIds: string[]; shouldPlaceOrder: boolean } {
+  return rule.enabled
+    ? { cancelOrderIds: [], shouldPlaceOrder: true }
+    : { cancelOrderIds: currentOrders.map((order) => order.id), shouldPlaceOrder: false };
+}
+
+export function enqueueSerializedTask<T>(
+  currentTail: Promise<void>,
+  task: () => Promise<T>,
+): { result: Promise<T>; nextTail: Promise<void> } {
+  const result = currentTail.then(task);
+  const nextTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return { result, nextTail };
 }
 
 function getOrderBookQuantity(order: Order): number {
@@ -1709,7 +1788,7 @@ export class GmMarketBot {
     transaction: Transaction,
     extraSigners: Keypair[] = [],
   ): Promise<{ signature: string; blockhash: string; lastValidBlockHeight: number }> {
-    const submit = this.transactionSubmissionQueue.then(async () => {
+    const queued = enqueueSerializedTask(this.transactionSubmissionQueue, async () => {
       const waitMs = Math.max(0, this.nextTransactionSubmitAtMs - Date.now());
       if (waitMs > 0) {
         this.logger.info(`RPC tx rate limit: waiting ${waitMs}ms before next transaction submission.`);
@@ -1731,12 +1810,9 @@ export class GmMarketBot {
       }
     });
 
-    this.transactionSubmissionQueue = submit.then(
-      () => undefined,
-      () => undefined,
-    );
+    this.transactionSubmissionQueue = queued.nextTail;
 
-    return await submit;
+    return await queued.result;
   }
 
   private async signAndSend(transaction: Transaction, extraSigners: Keypair[] = []): Promise<string> {
@@ -1833,34 +1909,26 @@ export class GmMarketBot {
     const mintKey = resource.mint.toBase58();
     const resourceState = ensureResourceState(this.state, mintKey);
     const sideState = getSideState(resourceState, side);
-    const currentById = new Map(currentOrders.map((order) => [order.id, order]));
-    const currentIds = new Set(currentById.keys());
+    const currentIds = new Set(currentOrders.map((order) => order.id));
+    const suppressedOrderIds = new Set([...cancelledIds, ...this.recentlyCancelledOrderIds]);
+    const fillEvents = classifyOrderFillEvents(sideState.openOrders, currentOrders, suppressedOrderIds);
 
-    for (const [orderId, meta] of Object.entries(sideState.openOrders)) {
-      const currentOrder = currentById.get(orderId);
-      if (currentOrder) {
-        const currentRemaining = getOrderRemainingQuantity(currentOrder);
-        if (currentRemaining < meta.remaining) {
-          const filledDelta = meta.remaining - currentRemaining;
-          await this.appendLog({
-            event: 'FILLED',
-            side,
-            resource: resource.name,
-            mint: resource.mint.toBase58(),
-            orderId,
-            price: meta.price,
-            quantity: meta.quantity,
-            filledDelta,
-            remaining: currentRemaining,
-            message: `Filled +${filledDelta}. Remaining ${currentRemaining}/${meta.quantity ?? meta.remaining}`,
-          });
-        }
-      }
-
-      const wasCancelled =
-        cancelledIds.has(orderId) || this.recentlyCancelledOrderIds.has(orderId);
-
-      if (!currentIds.has(orderId) && !wasCancelled) {
+    for (const fill of fillEvents) {
+      const { orderId, meta } = fill;
+      if (fill.kind === 'partial') {
+        await this.appendLog({
+          event: 'FILLED',
+          side,
+          resource: resource.name,
+          mint: resource.mint.toBase58(),
+          orderId,
+          price: meta.price,
+          quantity: meta.quantity,
+          filledDelta: fill.filledDelta,
+          remaining: fill.remaining,
+          message: `Filled +${fill.filledDelta}. Remaining ${fill.remaining}/${meta.quantity ?? meta.remaining}`,
+        });
+      } else {
         await this.appendLog({
           event: 'FILLED',
           side,
@@ -1971,8 +2039,10 @@ export class GmMarketBot {
 
     await this.detectFills(resource, 'sell', myOrders, cancelledIds);
 
-    if (rule && !rule.enabled) {
-      for (const order of myOrders) {
+    const executionPolicy = rule ? getRuleExecutionPolicy(rule, myOrders) : null;
+    if (executionPolicy && !executionPolicy.shouldPlaceOrder) {
+      const orderIdsToCancel = new Set(executionPolicy.cancelOrderIds);
+      for (const order of myOrders.filter((candidate) => orderIdsToCancel.has(candidate.id))) {
         await this.cancelOrder(order, resource, 'sell', cancelledIds);
       }
       this.logger.info(`${resource.name} sell rule is disabled. Existing sell orders cancelled; no new order will be placed.`);
@@ -2092,8 +2162,10 @@ export class GmMarketBot {
 
     await this.detectFills(resource, 'buy', myOrders, cancelledIds);
 
-    if (!rule.enabled) {
-      for (const order of myOrders) {
+    const executionPolicy = getRuleExecutionPolicy(rule, myOrders);
+    if (!executionPolicy.shouldPlaceOrder) {
+      const orderIdsToCancel = new Set(executionPolicy.cancelOrderIds);
+      for (const order of myOrders.filter((candidate) => orderIdsToCancel.has(candidate.id))) {
         await this.cancelOrder(order, resource, 'buy', cancelledIds);
       }
       this.logger.info(`${resource.name} buy rule is disabled. Existing buy orders cancelled; no new order will be placed.`);

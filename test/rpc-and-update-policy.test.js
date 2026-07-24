@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  callRpcWithFallback,
   callRpcWithRateLimitRetry,
   getRpcLimiterBucketName,
   isRpcRateLimitError,
@@ -29,6 +30,37 @@ test('RPC retry classification recognizes rate limits without swallowing unrelat
   assert.equal(isRpcRateLimitError({ code: -32005, message: 'rate limit exceeded' }), true);
   assert.equal(isRpcRateLimitError(new Error('blockhash not found')), false);
   assert.equal(isRpcRateLimitError(new Error('transaction simulation failed')), false);
+});
+
+test('RPC failover runs only after primary failure and returns the fallback result', async () => {
+  const calls = [];
+  const value = await callRpcWithFallback(
+    async () => {
+      calls.push('primary');
+      throw new Error('primary unavailable');
+    },
+    async () => {
+      calls.push('fallback');
+      return 'fallback-result';
+    },
+  );
+
+  assert.equal(value, 'fallback-result');
+  assert.deepEqual(calls, ['primary', 'fallback']);
+});
+
+test('RPC failover is skipped when primary succeeds and preserves fallback failure', async () => {
+  let fallbackCalls = 0;
+  assert.equal(await callRpcWithFallback(
+    async () => 'primary-result',
+    async () => { fallbackCalls += 1; return 'fallback-result'; },
+  ), 'primary-result');
+  assert.equal(fallbackCalls, 0);
+
+  await assert.rejects(() => callRpcWithFallback(
+    async () => { throw new Error('primary unavailable'); },
+    async () => { throw new Error('fallback unavailable'); },
+  ), /fallback unavailable/);
 });
 
 test('RPC retries a rate limit with the same bucket and does not retry unrelated failures', async () => {
