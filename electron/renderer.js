@@ -1364,6 +1364,12 @@ updateConfirmBtn.addEventListener('click', async () => {
   }
 });
 
+window.botApi.onUpdateProgress?.((progress) => {
+  if (!progress?.message) return;
+  updateMessageEl.textContent = progress.message;
+  appendLog(`[${new Date().toISOString()}] [INFO] Update: ${progress.message}`);
+});
+
 addRuleRowBtn.addEventListener('click', () => {
   if (!getResourceOptions(activeAssetRuleGroup).length) {
     appendLog(`[${new Date().toISOString()}] [WARN] Asset registry unavailable. Save a valid Aephia API Key first.`);

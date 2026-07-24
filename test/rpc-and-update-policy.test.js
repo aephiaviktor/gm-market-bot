@@ -8,7 +8,12 @@ const {
   getRpcLimiterBucketName,
   isRpcRateLimitError,
 } = require('../dist/bot');
-const { compareVersions, normalizeVersion, scheduleRelaunch } = require('../electron/update-policy');
+const {
+  compareVersions,
+  dependencySpecsChanged,
+  normalizeVersion,
+  scheduleRelaunch,
+} = require('../electron/update-policy');
 
 function createLimiterSpy() {
   const calls = [];
@@ -111,6 +116,31 @@ test('updater version policy handles prefixes and segment lengths', () => {
   assert.equal(compareVersions('0.3.12', '0.3.12'), 0);
   assert.equal(compareVersions('0.3.11', '0.3.12'), -1);
   assert.equal(compareVersions('0.3.12.1', '0.3.12'), 1);
+});
+
+test('updater installs dependencies only when dependency specifications change', () => {
+  const current = {
+    dependencies: { alpha: '^1.0.0' },
+    devDependencies: { beta: '^2.0.0' },
+  };
+
+  assert.equal(dependencySpecsChanged(current, {
+    ...current,
+    version: '0.3.16',
+  }), false);
+  assert.equal(dependencySpecsChanged({
+    dependencies: { alpha: '^1.0.0', zeta: '^9.0.0' },
+  }, {
+    dependencies: { zeta: '^9.0.0', alpha: '^1.0.0' },
+  }), false);
+  assert.equal(dependencySpecsChanged(current, {
+    dependencies: { alpha: '^1.1.0' },
+    devDependencies: current.devDependencies,
+  }), true);
+  assert.equal(dependencySpecsChanged(current, {
+    dependencies: current.dependencies,
+    devDependencies: { ...current.devDependencies, gamma: '^3.0.0' },
+  }), true);
 });
 
 test('updater acknowledges success before scheduling relaunch and exit', () => {

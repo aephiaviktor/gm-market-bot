@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 const lockfile = require('proper-lockfile');
 const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
-const { compareVersions, normalizeVersion, scheduleRelaunch } = require('./update-policy');
+const { compareVersions, dependencySpecsChanged, normalizeVersion, scheduleRelaunch } = require('./update-policy');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
@@ -269,6 +269,12 @@ async function downloadFile(url, targetPath) {
   await fs.writeFile(targetPath, buffer);
 }
 
+function emitUpdateProgress(stage, message) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update-progress', { stage, message });
+  }
+}
+
 async function downloadUpdateAndRestart() {
   const latest = await getLatestGithubVersion();
   const currentVersion = await readPackageVersion();
@@ -277,12 +283,17 @@ async function downloadUpdateAndRestart() {
   }
 
   if (botRunning) {
+    emitUpdateProgress('stopping-bot', 'Stopping the bot safely...');
     await stopBot();
   }
 
+  const appRoot = getAppRoot();
+  const currentPackage = JSON.parse(await fs.readFile(path.join(appRoot, 'package.json'), 'utf8'));
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gm-market-bot-update-'));
   const archivePath = path.join(tempDir, `${latest.branch || 'main'}.tar.gz`);
+  emitUpdateProgress('downloading', `Downloading GM Market Bot v${latest.version}...`);
   await downloadFile(latest.tarballUrl, archivePath);
+  emitUpdateProgress('extracting', 'Extracting the update...');
   await runCommand('tar', ['-xzf', archivePath, '-C', tempDir], { cwd: tempDir });
 
   const entries = await fs.readdir(tempDir, { withFileTypes: true });
@@ -292,7 +303,10 @@ async function downloadUpdateAndRestart() {
   }
 
   const extractedRoot = path.join(tempDir, extracted.name);
-  await fs.cp(extractedRoot, getAppRoot(), {
+  const nextPackage = JSON.parse(await fs.readFile(path.join(extractedRoot, 'package.json'), 'utf8'));
+  const installDependencies = dependencySpecsChanged(currentPackage, nextPackage);
+  emitUpdateProgress('copying', 'Installing updated application files...');
+  await fs.cp(extractedRoot, appRoot, {
     recursive: true,
     force: true,
     filter: (source) => {
@@ -301,9 +315,14 @@ async function downloadUpdateAndRestart() {
     },
   });
 
-  await runCommand('npm', ['install'], { cwd: getAppRoot() });
-  await runCommand('npm', ['run', 'build'], { cwd: getAppRoot() });
+  if (installDependencies) {
+    emitUpdateProgress('dependencies', 'Dependencies changed; updating packages...');
+    await runCommand('npm', ['install', '--no-audit', '--no-fund'], { cwd: appRoot });
+  }
+  emitUpdateProgress('building', 'Building the updated application...');
+  await runCommand('npm', ['run', 'build'], { cwd: appRoot });
 
+  emitUpdateProgress('restarting', `GM Market Bot v${latest.version} installed. Restarting now...`);
   scheduleRelaunch(app);
   return { updated: true, currentVersion, latestVersion: latest.version };
 }

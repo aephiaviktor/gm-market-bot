@@ -1,6 +1,6 @@
 {
   "name": "gm-market-bot",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "description": "",
   "main": "electron/main.js",
   "scripts": {
