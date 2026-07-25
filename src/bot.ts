@@ -1343,6 +1343,33 @@ function getRelevantOrderThreshold(quantity: number, pct: number): number {
   return Math.max(1, Math.ceil(quantity * (pct / 100)));
 }
 
+export type CycleTask = {
+  asset: string;
+  run: () => Promise<unknown>;
+};
+
+export type CycleTaskOutcome =
+  | { asset: string; ok: true }
+  | { asset: string; ok: false; error: string };
+
+export async function runCycleTasksSafely(
+  tasks: CycleTask[],
+  onFailure: (asset: string, error: Error) => Promise<unknown>,
+): Promise<CycleTaskOutcome[]> {
+  const outcomes: CycleTaskOutcome[] = [];
+  for (const task of tasks) {
+    try {
+      await task.run();
+      outcomes.push({ asset: task.asset, ok: true });
+    } catch (error) {
+      const normalizedError = error instanceof Error ? error : new Error(String(error));
+      outcomes.push({ asset: task.asset, ok: false, error: normalizedError.message });
+      await onFailure(task.asset, normalizedError);
+    }
+  }
+  return outcomes;
+}
+
 export function calculateTargetSellPrice(
   allSellOrders: Order[],
   walletOwner: string,
@@ -2379,33 +2406,37 @@ export class GmMarketBot {
     if (this.config.assetRules.length > 0) {
       const groupedRules = groupRulesByAsset(this.config.assetRules);
 
-      for (const group of groupedRules.values()) {
-        try {
-          await this.processAssetRuleGroup(group);
-        } catch (err) {
+      const groupsByAsset = new Map([...groupedRules.values()].map((group) => [group.asset, group]));
+      await runCycleTasksSafely(
+        [...groupedRules.values()].map((group) => ({
+          asset: group.asset,
+          run: () => this.processAssetRuleGroup(group),
+        })),
+        async (asset, error) => {
+          const group = groupsByAsset.get(asset);
           let mint: string | undefined;
           let resourceName: string | undefined;
 
           try {
-            const parsed = resolveResourceForRule(group.rules[0].rule);
-            mint = parsed.mint.toBase58();
-            resourceName = parsed.name;
+            const parsed = group ? resolveResourceForRule(group.rules[0].rule) : undefined;
+            mint = parsed?.mint.toBase58();
+            resourceName = parsed?.name;
           } catch {
             mint = undefined;
             resourceName = undefined;
           }
 
-          this.logger.error(`Cycle failed for asset ${group.asset}:`, err);
+          this.logger.error(`Cycle failed for asset ${asset}:`, error);
           await this.appendLog({
             event: 'ERROR',
-            asset: group.asset,
+            asset,
             resource: resourceName,
             mint,
-            ruleIndexes: group.rules.map((item) => item.index),
-            message: (err as Error).message,
+            ruleIndexes: group?.rules.map((item) => item.index),
+            message: error.message,
           });
-        }
-      }
+        },
+      );
       return;
     }
 
