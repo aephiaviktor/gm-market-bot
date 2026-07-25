@@ -85,5 +85,6 @@ test('blank or redacted sensitive submissions preserve stored values', () => {
 test('configured secure fields explain how to replace their hidden value', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../electron/renderer.js'), 'utf8');
   assert.match(renderer, /Stored securely — enter a new value to replace/);
-  assert.match(renderer, /Show Current RPC Limiter URL/);
+  assert.match(renderer, /Show RPC URL/);
+  assert.match(renderer, /if \(nextTab === 'setup'\) \{\s*setSensitiveVisible\(false\);\s*\}/);
 });

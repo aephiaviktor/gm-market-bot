@@ -203,11 +203,14 @@ function maybeCheckForUpdatesAfterCycle(snapshot) {
 function setSensitiveVisible(visible) {
   sensitiveVisible = visible;
   form.classList.toggle('sensitive-hidden', !visible);
-  toggleSensitiveBtn.textContent = visible ? 'Hide Current RPC Limiter URL' : 'Show Current RPC Limiter URL';
+  toggleSensitiveBtn.textContent = visible ? 'Hide RPC URL' : 'Show RPC URL';
 }
 
 function setActiveTab(tabName) {
   const nextTab = tabName === 'setup' ? 'setup' : 'asset-rules';
+  if (nextTab === 'setup') {
+    setSensitiveVisible(false);
+  }
   for (const button of tabButtons) {
     button.classList.toggle('active', nextTab === 'setup');
     button.setAttribute('aria-selected', String(nextTab === 'setup'));
