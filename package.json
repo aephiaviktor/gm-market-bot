@@ -1,6 +1,6 @@
 {
   "name": "gm-market-bot",
-  "version": "0.3.22",
+  "version": "0.3.23",
   "description": "",
   "main": "electron/main.js",
   "scripts": {
@@ -16,7 +16,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@solana/spl-token": "^0.4.14",
+    "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.98.4",
     "@staratlas/factory": "^0.7.1",
     "bs58": "^6.0.0",
@@ -24,8 +24,8 @@
     "rpc_limiter": "git+https://github.com/aephiaviktor/rpc-limiter.git#main"
   },
   "devDependencies": {
-    "@types/node": "^25.3.3",
-    "electron": "^42.1.0",
+    "@types/node": "^25.9.5",
+    "electron": "^42.7.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }
