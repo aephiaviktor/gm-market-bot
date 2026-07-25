@@ -855,6 +855,8 @@ function createWindow() {
     mainWindow.setIcon(iconPath);
   }
   attachWindowCrashLogging(mainWindow);
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
 
   mainWindow.loadFile(path.join(__dirname, 'renderer.html'));
 }

@@ -76,3 +76,15 @@ test('renderer CSP permits only packaged scripts and styles', () => {
   assert.match(html, /connect-src 'none'/);
   assert.doesNotMatch(html, /script-src[^;]*'unsafe-inline'/);
 });
+
+test('renderer builds dynamic content without innerHTML injection sinks', () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../electron/renderer.js'), 'utf8');
+  assert.doesNotMatch(renderer, /\.innerHTML\s*=/);
+  assert.match(renderer, /\.textContent\s*=/);
+});
+
+test('application window blocks renderer navigation and new windows', () => {
+  const main = fs.readFileSync(path.join(__dirname, '../electron/main.js'), 'utf8');
+  assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/);
+  assert.match(main, /on\('will-navigate', \(event\) => event\.preventDefault\(\)\)/);
+});

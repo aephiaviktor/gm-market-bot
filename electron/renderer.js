@@ -382,6 +382,80 @@ function normalizeAssetRuleRows(rows) {
   return combinedRows;
 }
 
+function createNode(tagName, className = '', text = null) {
+  const node = document.createElement(tagName);
+  if (className) node.className = className;
+  if (text !== null) node.textContent = String(text);
+  return node;
+}
+
+function appendEmptyState(container, message, colspan = null) {
+  if (colspan === null) {
+    container.appendChild(createNode('div', 'empty-state', message));
+    return;
+  }
+  const row = document.createElement('tr');
+  const cell = createNode('td', 'empty-state', message);
+  cell.colSpan = colspan;
+  row.appendChild(cell);
+  container.appendChild(row);
+}
+
+function createRuleInputCell(index, field, options = {}) {
+  const cell = document.createElement('td');
+  const stack = createNode('div', `cell-stack ${options.stackClass || ''}`.trim());
+  const input = document.createElement('input');
+  input.dataset.index = String(index);
+  input.dataset.field = field;
+  input.type = options.type || 'text';
+  if (options.inputMode) input.inputMode = options.inputMode;
+  if (options.min !== undefined) input.min = String(options.min);
+  if (options.step !== undefined) input.step = String(options.step);
+  if (options.autocomplete) input.autocomplete = options.autocomplete;
+  if (options.spellcheck !== undefined) input.spellcheck = options.spellcheck;
+  stack.appendChild(input);
+  if (options.hint) stack.appendChild(createNode('span', 'cell-hint', options.hint));
+  cell.appendChild(stack);
+  return cell;
+}
+
+function createAssetRuleRowElement(index, priceUnit) {
+  const row = document.createElement('tr');
+  const enableCell = createNode('td', 'enable-cell');
+  const enabledInput = document.createElement('input');
+  enabledInput.dataset.index = String(index);
+  enabledInput.dataset.field = 'enabled';
+  enabledInput.type = 'checkbox';
+  enableCell.appendChild(enabledInput);
+  row.appendChild(enableCell);
+
+  const assetCell = document.createElement('td');
+  const assetSelect = document.createElement('select');
+  assetSelect.dataset.index = String(index);
+  assetSelect.dataset.field = 'asset';
+  assetCell.appendChild(assetSelect);
+  row.appendChild(assetCell);
+
+  row.appendChild(createRuleInputCell(index, 'minQuantity', { stackClass: 'compact-cell', inputMode: 'numeric', autocomplete: 'off', spellcheck: false, hint: 'Min order' }));
+  row.appendChild(createRuleInputCell(index, 'maxQuantity', { stackClass: 'compact-cell', inputMode: 'numeric', autocomplete: 'off', spellcheck: false, hint: 'Max active' }));
+  for (const field of ['minBuyPrice', 'maxBuyPrice', 'minSellPrice', 'maxSellPrice']) {
+    row.appendChild(createRuleInputCell(index, field, { stackClass: 'price-cell', type: 'number', min: 0, step: '0.000001', inputMode: 'decimal', hint: priceUnit }));
+  }
+
+  const actionsCell = createNode('td', 'remove-cell');
+  const actions = createNode('div', 'cell-stack');
+  const cancelButton = createNode('button', 'cancel-order-btn', 'Cancel Order');
+  cancelButton.type = 'button';
+  cancelButton.dataset.index = String(index);
+  const removeButton = createNode('button', 'remove-row-btn', 'Remove');
+  removeButton.type = 'button';
+  removeButton.dataset.index = String(index);
+  actions.append(cancelButton, removeButton);
+  actionsCell.appendChild(actions);
+  row.appendChild(actionsCell);
+  return row;
+}
+
 function renderAssetRuleRows() {
   syncRowsWithResources();
   const isShipMarket = activeAssetRuleGroup === 'ships' || activeAssetRuleGroup === 'ship-parts';
@@ -397,17 +471,17 @@ function renderAssetRuleRows() {
       return assetA.localeCompare(assetB, undefined, { numeric: true });
     });
 
-  assetRulesBody.innerHTML = '';
+  assetRulesBody.replaceChildren();
   addRuleRowBtn.disabled = options.length === 0;
   const emptyColspan = 9;
 
   if (!allOptions.length) {
-    assetRulesBody.innerHTML = `<tr><td colspan="${emptyColspan}" class="empty-state">Asset registry unavailable. Save a valid Aephia API Key in Settings to load the managed asset list.</td></tr>`;
+    appendEmptyState(assetRulesBody, 'Asset registry unavailable. Save a valid Aephia API Key in Settings to load the managed asset list.', emptyColspan);
     return;
   }
 
   if (!options.length) {
-    assetRulesBody.innerHTML = `<tr><td colspan="${emptyColspan}" class="empty-state">No assets available for this group.</td></tr>`;
+    appendEmptyState(assetRulesBody, 'No assets available for this group.', emptyColspan);
     return;
   }
 
@@ -422,62 +496,12 @@ function renderAssetRuleRows() {
             : activeAssetRuleGroup === 'crew-packs'
               ? 'crew pack'
               : 'raw material';
-    assetRulesBody.innerHTML = `<tr><td colspan="${emptyColspan}" class="empty-state">No ${groupLabel} rules yet. Use + Add Row.</td></tr>`;
+    appendEmptyState(assetRulesBody, `No ${groupLabel} rules yet. Use + Add Row.`, emptyColspan);
     return;
   }
 
   visibleRows.forEach(({ row, index }) => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="enable-cell">
-        <input data-index="${index}" data-field="enabled" type="checkbox" />
-      </td>
-      <td>
-        <select data-index="${index}" data-field="asset"></select>
-      </td>
-      <td>
-        <div class="cell-stack compact-cell">
-          <input data-index="${index}" data-field="minQuantity" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" />
-          <span class="cell-hint">Min order</span>
-        </div>
-      </td>
-      <td>
-        <div class="cell-stack compact-cell">
-          <input data-index="${index}" data-field="maxQuantity" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" />
-          <span class="cell-hint">Max active</span>
-        </div>
-      </td>
-      <td>
-        <div class="cell-stack price-cell">
-          <input data-index="${index}" data-field="minBuyPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
-          <span class="cell-hint">${priceUnit}</span>
-        </div>
-      </td>
-      <td>
-        <div class="cell-stack price-cell">
-          <input data-index="${index}" data-field="maxBuyPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
-          <span class="cell-hint">${priceUnit}</span>
-        </div>
-      </td>
-      <td>
-        <div class="cell-stack price-cell">
-          <input data-index="${index}" data-field="minSellPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
-          <span class="cell-hint">${priceUnit}</span>
-        </div>
-      </td>
-      <td>
-        <div class="cell-stack price-cell">
-          <input data-index="${index}" data-field="maxSellPrice" type="number" min="0" step="0.000001" inputmode="decimal" />
-          <span class="cell-hint">${priceUnit}</span>
-        </div>
-      </td>
-      <td class="remove-cell">
-        <div class="cell-stack">
-          <button type="button" class="cancel-order-btn" data-index="${index}">Cancel Order</button>
-          <button type="button" class="remove-row-btn" data-index="${index}">Remove</button>
-        </div>
-      </td>
-    `;
+    const tr = createAssetRuleRowElement(index, priceUnit);
 
     const assetSelect = tr.querySelector('[data-field="asset"]');
     const enabledInput = tr.querySelector('[data-field="enabled"]');
@@ -818,177 +842,117 @@ function sortByAssetRuleOrder(items, assetGetter) {
   });
 }
 
-function renderOpenOrders(orders) {
-  openOrdersListEl.innerHTML = '';
-  setListCount(openOrdersCountEl, orders.length);
+function appendMetric(parent, metricClass, labelClass, label, value) {
+  const metric = createNode('span', metricClass);
+  metric.append(createNode('span', labelClass, label), createNode('span', '', value));
+  parent.appendChild(metric);
+}
 
+function renderOpenOrders(orders) {
+  openOrdersListEl.replaceChildren();
+  setListCount(openOrdersCountEl, orders.length);
   if (!orders.length) {
-    openOrdersListEl.innerHTML = '<div class="empty-state">No open orders</div>';
+    appendEmptyState(openOrdersListEl, 'No open orders');
     return;
   }
 
   const sortedOrders = sortByAssetRuleOrder(orders, (order) => order?.asset);
-
   for (const order of sortedOrders) {
-    const item = document.createElement('div');
-    item.className = 'status-item order-item';
+    const item = createNode('div', 'status-item order-item');
+    const top = createNode('div', 'status-item-top');
+    const left = createNode('div', 'order-left');
+    left.appendChild(createNode('span', 'order-asset', order.asset || 'Unknown Asset'));
+    left.appendChild(createNode('span', `badge ${order.side === 'buy' ? 'buy' : 'sell'}`, order.side));
+    if (order.marketLeader === 'hb') left.appendChild(createNode('span', 'badge leader', 'BB'));
+    if (order.marketLeader === 'ba') left.appendChild(createNode('span', 'badge leader', 'BA'));
+    if (order.partiallyFilled) left.appendChild(createNode('span', 'badge partial', 'Partial'));
 
     const hasOriginalQuantity = typeof order.quantity === 'number' && Number.isFinite(order.quantity);
-    const isPartiallyFilled =
-      hasOriginalQuantity &&
-      typeof order.remaining === 'number' &&
-      Number.isFinite(order.remaining) &&
-      order.remaining < order.quantity;
+    const isPartiallyFilled = hasOriginalQuantity && typeof order.remaining === 'number'
+      && Number.isFinite(order.remaining) && order.remaining < order.quantity;
     const qtyLabel = isPartiallyFilled ? 'Remaining / Size' : 'Qty';
     const qtyText = isPartiallyFilled
       ? `${formatNumber(order.remaining, 0)} / ${formatNumber(order.quantity, 0)}`
       : formatNumber(order.remaining, 0);
-
-    item.innerHTML = `
-      <div class="status-item-top">
-        <div class="order-left">
-          <span class="order-asset">${order.asset || 'Unknown Asset'}</span>
-          <span class="badge ${order.side === 'buy' ? 'buy' : 'sell'}">${order.side}</span>
-          ${order.marketLeader === 'hb' ? '<span class="badge leader">BB</span>' : ''}
-          ${order.marketLeader === 'ba' ? '<span class="badge leader">BA</span>' : ''}
-          ${order.partiallyFilled ? '<span class="badge partial">Partial</span>' : ''}
-        </div>
-        <div class="order-right">
-          <span class="order-metric">
-            <span class="order-metric-label">Price</span>
-            <span>${formatNumber(order.price, 6)} ${order.currency || ''}</span>
-          </span>
-          <span class="order-metric">
-            <span class="order-metric-label">${qtyLabel}</span>
-            <span>${qtyText}</span>
-          </span>
-        </div>
-      </div>
-    `;
-
+    const right = createNode('div', 'order-right');
+    appendMetric(right, 'order-metric', 'order-metric-label', 'Price', `${formatNumber(order.price, 6)} ${order.currency || ''}`);
+    appendMetric(right, 'order-metric', 'order-metric-label', qtyLabel, qtyText);
+    top.append(left, right);
+    item.appendChild(top);
     openOrdersListEl.appendChild(item);
   }
 }
 
 function renderInventory(items) {
-  inventoryListEl.innerHTML = '';
+  inventoryListEl.replaceChildren();
   const visibleItems = (Array.isArray(items) ? items : []).filter(
     (item) => typeof item?.balance === 'number' && Number.isFinite(item.balance) && item.balance > 0,
   );
   setListCount(inventoryCountEl, visibleItems.length);
-
   if (!visibleItems.length) {
-    inventoryListEl.innerHTML = '<div class="empty-state">All tracked inventory is 0</div>';
+    appendEmptyState(inventoryListEl, 'All tracked inventory is 0');
     return;
   }
 
   const sortedItems = sortByAssetRuleOrder(visibleItems, (item) => item?.asset);
-
   for (const itemData of sortedItems) {
-    const item = document.createElement('div');
-    item.className = 'status-item inventory-item';
-
-    item.innerHTML = `
-      <div class="status-item-top">
-        <div class="inventory-left">
-          <span class="inventory-asset">${itemData.asset || itemData.mint || 'Unknown Asset'}</span>
-        </div>
-        <div class="inventory-right">
-          <span class="inventory-metric">
-            <span class="inventory-metric-label">Balance</span>
-            <span>${formatNumber(itemData.balance, 6)}</span>
-          </span>
-        </div>
-      </div>
-    `;
-
+    const item = createNode('div', 'status-item inventory-item');
+    const top = createNode('div', 'status-item-top');
+    const left = createNode('div', 'inventory-left');
+    left.appendChild(createNode('span', 'inventory-asset', itemData.asset || itemData.mint || 'Unknown Asset'));
+    const right = createNode('div', 'inventory-right');
+    appendMetric(right, 'inventory-metric', 'inventory-metric-label', 'Balance', formatNumber(itemData.balance, 6));
+    top.append(left, right);
+    item.appendChild(top);
     inventoryListEl.appendChild(item);
   }
 }
 
 function getActivityTitle(entry) {
-  if (entry.event === 'START') {
-    return 'Bot Start';
-  }
-  if (entry.event === 'FILLED') {
-    return ['FILLED', entry.resource || entry.asset || ''].filter(Boolean).join(' · ');
-  }
+  if (entry.event === 'START') return 'Bot Start';
+  if (entry.event === 'FILLED') return ['FILLED', entry.resource || entry.asset || ''].filter(Boolean).join(' · ');
   return [entry.event, entry.resource || entry.asset || ''].filter(Boolean).join(' · ');
 }
 
 function getActivityTone(entry) {
-  if (entry.event === 'FILLED') {
-    return 'filled';
-  }
-  if (entry.event === 'START') {
-    return 'start';
-  }
+  if (entry.event === 'FILLED') return 'filled';
+  if (entry.event === 'START') return 'start';
   return 'default';
 }
 
-function getActivityBadge(entry) {
-  if (entry.event === 'FILLED') {
-    return '<span class="badge activity-badge filled">FILLED</span>';
-  }
-  if (entry.event === 'START') {
-    return '<span class="badge activity-badge start">START</span>';
-  }
-  return '';
+function appendActivityBadge(parent, entry) {
+  if (entry.event === 'FILLED') parent.appendChild(createNode('span', 'badge activity-badge filled', 'FILLED'));
+  if (entry.event === 'START') parent.appendChild(createNode('span', 'badge activity-badge start', 'START'));
 }
 
 function renderRecentActivity(items) {
-  recentActivityListEl.innerHTML = '';
+  recentActivityListEl.replaceChildren();
   setListCount(recentActivityCountEl, items.length);
-
   if (!items.length) {
-    recentActivityListEl.innerHTML = '<div class="empty-state">No recent activity</div>';
+    appendEmptyState(recentActivityListEl, 'No recent activity');
     return;
   }
 
   for (const entry of items) {
     const tone = getActivityTone(entry);
-    const item = document.createElement('div');
-    item.className = `status-item activity-item activity-item-${tone}`;
-
-    const title = getActivityTitle(entry);
-    const badge = getActivityBadge(entry);
+    const item = createNode('div', `status-item activity-item activity-item-${tone}`);
+    const top = createNode('div', 'status-item-top');
+    const left = createNode('div', 'activity-left');
+    left.appendChild(createNode('span', 'activity-title', getActivityTitle(entry) || 'Activity'));
+    appendActivityBadge(left, entry);
+    const right = createNode('div', 'activity-right');
+    appendMetric(right, 'activity-metric', 'activity-metric-label', 'At', formatTimestamp(entry.timestamp));
+    top.append(left, right);
 
     const details = [];
-    if (entry.side) {
-      details.push(entry.side);
-    }
-    if (typeof entry.price === 'number') {
-      details.push(`P ${formatNumber(entry.price, 6)}`);
-    }
-    if (typeof entry.quantity === 'number') {
-      details.push(`Q ${formatNumber(entry.quantity, 0)}`);
-    }
-    if (typeof entry.remaining === 'number') {
-      details.push(`R ${formatNumber(entry.remaining, 0)}`);
-    }
-    if (entry.message) {
-      details.push(entry.message);
-    }
-
-    item.innerHTML = `
-      <div class="status-item-top">
-        <div class="activity-left">
-          <span class="activity-title">${title || 'Activity'}</span>
-          ${badge}
-        </div>
-        <div class="activity-right">
-          <span class="activity-metric">
-            <span class="activity-metric-label">At</span>
-            <span>${formatTimestamp(entry.timestamp)}</span>
-          </span>
-        </div>
-      </div>
-      <div class="status-item-row">
-        <span class="status-item-subtle">Details</span>
-        <span class="status-item-value">${details.join(' · ') || '—'}</span>
-      </div>
-    `;
-
+    if (entry.side) details.push(entry.side);
+    if (typeof entry.price === 'number') details.push(`P ${formatNumber(entry.price, 6)}`);
+    if (typeof entry.quantity === 'number') details.push(`Q ${formatNumber(entry.quantity, 0)}`);
+    if (typeof entry.remaining === 'number') details.push(`R ${formatNumber(entry.remaining, 0)}`);
+    if (entry.message) details.push(entry.message);
+    const detailRow = createNode('div', 'status-item-row');
+    detailRow.append(createNode('span', 'status-item-subtle', 'Details'), createNode('span', 'status-item-value', details.join(' · ') || '—'));
+    item.append(top, detailRow);
     recentActivityListEl.appendChild(item);
   }
 }
