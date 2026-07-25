@@ -7,7 +7,13 @@ const { spawn } = require('child_process');
 const lockfile = require('proper-lockfile');
 const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
-const { compareVersions, dependencySpecsChanged, normalizeVersion, scheduleRelaunch } = require('./update-policy');
+const {
+  buildWindowsDependencyUpdateScript,
+  compareVersions,
+  dependencySpecsChanged,
+  normalizeVersion,
+  scheduleRelaunch,
+} = require('./update-policy');
 const {
   REDACTED_VALUE,
   SENSITIVE_CONFIG_KEYS,
@@ -273,6 +279,37 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+async function launchWindowsDependencyUpdater(appRoot, tempDir) {
+  const scriptPath = path.join(tempDir, 'finish-update.ps1');
+  const script = buildWindowsDependencyUpdateScript({
+    appRoot,
+    parentPid: process.pid,
+  });
+  await fs.writeFile(scriptPath, script, 'utf8');
+
+  const powerShell = path.join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  const child = spawn(powerShell, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    scriptPath,
+  ], {
+    cwd: appRoot,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
+
 async function downloadFile(url, targetPath) {
   const response = await fetch(url, {
     headers: { 'User-Agent': 'gm-market-bot-updater' },
@@ -331,6 +368,17 @@ async function downloadUpdateAndRestart() {
   });
 
   if (installDependencies) {
+    if (process.platform === 'win32') {
+      emitUpdateProgress('dependencies', 'Restarting safely to update packages...');
+      await launchWindowsDependencyUpdater(appRoot, tempDir);
+      setTimeout(() => app.exit(0), 1250);
+      return {
+        updated: true,
+        currentVersion,
+        latestVersion: latest.version,
+        finishingDependencies: true,
+      };
+    }
     emitUpdateProgress('dependencies', 'Dependencies changed; updating packages...');
     await runCommand('npm', ['install', '--no-audit', '--no-fund'], { cwd: appRoot });
   }

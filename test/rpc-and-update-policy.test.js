@@ -9,6 +9,7 @@ const {
   isRpcRateLimitError,
 } = require('../dist/bot');
 const {
+  buildWindowsDependencyUpdateScript,
   compareVersions,
   dependencySpecsChanged,
   normalizeVersion,
@@ -141,6 +142,29 @@ test('updater installs dependencies only when dependency specifications change',
     dependencies: current.dependencies,
     devDependencies: { ...current.devDependencies, gamma: '^3.0.0' },
   }), true);
+});
+
+test('Windows dependency updater waits for Electron to exit before replacing packages', () => {
+  const script = buildWindowsDependencyUpdateScript({
+    appRoot: "C:\\Apps\\GM Market Bot's Test",
+    parentPid: 4321,
+  });
+
+  assert.match(script, /Wait-Process -Id \$parentPid/);
+  assert.match(script, /npm\.cmd.*install/);
+  assert.ok(script.includes('node_modules\\electron\\install.js'));
+  assert.match(script, /npm\.cmd.*run.*build/);
+  assert.ok(script.includes('Invoke-UpdateCommand "schtasks.exe"'));
+  assert.ok(script.includes("$taskName = 'GM Market Bot'"));
+  assert.match(script, /GM Market Bot''s Test/);
+  assert.ok(script.indexOf('Wait-Process') < script.indexOf('npm.cmd'));
+});
+
+test('Windows dependency updater rejects an invalid parent process id', () => {
+  assert.throws(() => buildWindowsDependencyUpdateScript({
+    appRoot: 'C:\\Apps\\gm-market-bot',
+    parentPid: 0,
+  }), /positive parent process id/);
 });
 
 test('updater acknowledges success before scheduling relaunch and exit', () => {
