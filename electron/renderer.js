@@ -1261,7 +1261,10 @@ saveBtn.addEventListener('click', async () => {
   const currentConfig = { ...(result?.config || readFormConfig()) };
   const currentRules = normalizeAssetRulesForDiff(assetRuleRows);
 
-  const changedConfigKeys = getChangedConfigKeys(previousConfig, currentConfig);
+  const changedConfigKeys = Array.from(new Set([
+    ...getChangedConfigKeys(previousConfig, currentConfig),
+    ...(Array.isArray(result?.changedSensitiveKeys) ? result.changedSensitiveKeys : []),
+  ]));
   const needsRestart = changedConfigKeys.some((key) => FULL_RESTART_CONFIG_KEYS.has(key));
   const rerunAllAssets = changedConfigKeys.some((key) => RERUN_ALL_ASSETS_CONFIG_KEYS.has(key));
   const changedAssets = getChangedAssets(previousRules, currentRules);

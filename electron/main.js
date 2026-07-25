@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, powerSaveBlocker, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
@@ -8,6 +8,13 @@ const lockfile = require('proper-lockfile');
 const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
 const { compareVersions, dependencySpecsChanged, normalizeVersion, scheduleRelaunch } = require('./update-policy');
+const {
+  REDACTED_VALUE,
+  SENSITIVE_CONFIG_KEYS,
+  mergeSensitiveConfig,
+  redactConfigForRenderer,
+  splitSensitiveConfig,
+} = require('./secret-storage-policy');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
@@ -415,6 +422,50 @@ function getSettingsPath() {
   return path.join(app.getPath('userData'), 'settings.json');
 }
 
+function getSecretsPath() {
+  return path.join(app.getPath('userData'), 'secrets.json');
+}
+
+async function writeJsonAtomic(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await fs.rename(temporaryPath, filePath);
+}
+
+function assertSecretEncryptionAvailable() {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Secure credential storage is unavailable on this system. Settings were not changed.');
+  }
+}
+
+async function loadSecretSettings() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(getSecretsPath(), 'utf8'));
+    const secrets = {};
+    for (const key of SENSITIVE_CONFIG_KEYS) {
+      const encrypted = String(parsed?.[key] || '');
+      secrets[key] = encrypted
+        ? safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+        : '';
+    }
+    return secrets;
+  } catch (err) {
+    if (err?.code === 'ENOENT') return {};
+    throw new Error(`Secure settings could not be read: ${err?.message || String(err)}`);
+  }
+}
+
+async function saveSecretSettings(secrets) {
+  assertSecretEncryptionAvailable();
+  const encrypted = {};
+  for (const key of SENSITIVE_CONFIG_KEYS) {
+    const value = String(secrets?.[key] ?? '');
+    encrypted[key] = value ? safeStorage.encryptString(value).toString('base64') : '';
+  }
+  await writeJsonAtomic(getSecretsPath(), encrypted);
+}
+
 function normalizeAssetRules(rows) {
   if (!Array.isArray(rows)) {
     return [];
@@ -464,8 +515,6 @@ function getRpcLimiterStatus() {
   return {
     path: paths.stateFile,
     enabled: Boolean(state.enabled),
-    rpcBaseUrl: state.rpcBaseUrl || '',
-    apiKey: state.apiKey || '',
     currentRpcUrl,
     buckets: state.buckets || {},
     updatedBy: state.updatedBy || '',
@@ -582,18 +631,32 @@ async function loadLocalSettings() {
     if (!parsed || typeof parsed !== 'object') {
       return {};
     }
-    return parsed;
-  } catch {
-    return {};
+    const { publicConfig, sensitiveConfig: legacySecrets } = splitSensitiveConfig(parsed);
+    const storedSecrets = await loadSecretSettings();
+    const migratedSecrets = mergeSensitiveConfig(storedSecrets, legacySecrets);
+    const hasLegacySecrets = SENSITIVE_CONFIG_KEYS.some((key) => String(legacySecrets[key] || '').trim());
+    if (hasLegacySecrets) {
+      await saveSecretSettings(migratedSecrets);
+      await writeJsonAtomic(getSettingsPath(), publicConfig);
+    }
+    return { ...publicConfig, ...migratedSecrets };
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { ...(await loadSecretSettings()) };
+    throw err;
   }
 }
 
 async function saveLocalSettings(payload) {
   const current = await loadLocalSettings();
   const filtered = {};
+  const sourceConfig = payload?.config && typeof payload.config === 'object' ? payload.config : payload;
+  const submittedSecrets = {};
 
   for (const key of EDITABLE_CONFIG_KEYS) {
-    const sourceConfig = payload?.config && typeof payload.config === 'object' ? payload.config : payload;
+    if (SENSITIVE_CONFIG_KEYS.includes(key)) {
+      submittedSecrets[key] = sourceConfig?.[key];
+      continue;
+    }
     if (Object.prototype.hasOwnProperty.call(sourceConfig || {}, key)) {
       filtered[key] = String(sourceConfig[key] ?? '');
     } else if (Object.prototype.hasOwnProperty.call(current, key)) {
@@ -602,10 +665,20 @@ async function saveLocalSettings(payload) {
   }
 
   filtered.ASSET_RULE_ROWS = normalizeAssetRules(payload?.assetRules ?? current.ASSET_RULE_ROWS ?? []);
+  const secrets = mergeSensitiveConfig(current, submittedSecrets);
+  await saveSecretSettings(secrets);
+  await writeJsonAtomic(getSettingsPath(), filtered);
+  return { ...filtered, ...secrets };
+}
 
-  await fs.mkdir(path.dirname(getSettingsPath()), { recursive: true });
-  await fs.writeFile(getSettingsPath(), JSON.stringify(filtered, null, 2), 'utf8');
-  return filtered;
+async function resolveSubmittedConfig(payload) {
+  const effective = await getEffectiveEditableConfig();
+  const source = payload?.config && typeof payload.config === 'object' ? payload.config : payload;
+  return {
+    ...effective,
+    ...(source || {}),
+    ...mergeSensitiveConfig(effective, source || {}),
+  };
 }
 
 async function getEffectiveEditableConfig(options = {}) {
@@ -786,7 +859,7 @@ ipcMain.handle('settings:get', async () => {
   const config = await getEffectiveEditableConfig();
   const localSettings = await loadLocalSettings();
   return {
-    config,
+    config: redactConfigForRenderer(config),
     rpcLimiter: getRpcLimiterStatus(),
     running: botRunning,
     assetRules: normalizeAssetRules(localSettings.ASSET_RULE_ROWS ?? []),
@@ -794,18 +867,24 @@ ipcMain.handle('settings:get', async () => {
 });
 
 ipcMain.handle('settings:save', async (_event, payload) => {
+  const previous = await loadLocalSettings();
+  const source = payload?.config && typeof payload.config === 'object' ? payload.config : payload;
+  const changedSensitiveKeys = SENSITIVE_CONFIG_KEYS.filter((key) => {
+    const submitted = String(source?.[key] ?? '');
+    return submitted.trim() && submitted !== REDACTED_VALUE && submitted !== String(previous[key] ?? '');
+  });
   const saved = await saveLocalSettings(payload || {});
   const config = await getEffectiveEditableConfig();
   return {
-    config,
+    config: redactConfigForRenderer(config),
     rpcLimiter: getRpcLimiterStatus(),
     assetRules: normalizeAssetRules(saved.ASSET_RULE_ROWS),
+    changedSensitiveKeys,
   };
 });
 
 ipcMain.handle('rpc-limiter:send-settings', async (_event, payload) => {
-  const sourceConfig = payload?.config && typeof payload.config === 'object' ? payload.config : payload;
-  return await sendSettingsToRpcLimiter(sourceConfig || {});
+  return await sendSettingsToRpcLimiter(await resolveSubmittedConfig(payload || {}));
 });
 
 ipcMain.handle('rpc-limiter:get-status', async () => getRpcLimiterStatus());
