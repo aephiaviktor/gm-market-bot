@@ -16,6 +16,13 @@ const {
   redactConfigForRenderer,
   splitSensitiveConfig,
 } = require('./secret-storage-policy');
+const {
+  isTrustedIpcEvent,
+  validateAssetList,
+  validateAssetsPayload,
+  validateCancelOrderPayload,
+  validateSettingsPayload,
+} = require('./ipc-security-policy');
 
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-gpu');
@@ -854,9 +861,19 @@ function createWindow() {
 
 installCrashEventLogging();
 
-ipcMain.handle('logs:get', async () => recentLogs);
+function registerTrustedIpcHandler(channel, handler) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    const expectedWebContents = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+    if (!isTrustedIpcEvent(event, expectedWebContents)) {
+      throw new Error(`Rejected untrusted IPC sender for ${channel}.`);
+    }
+    return handler(event, ...args);
+  });
+}
 
-ipcMain.handle('settings:get', async () => {
+registerTrustedIpcHandler('logs:get', async () => recentLogs);
+
+registerTrustedIpcHandler('settings:get', async () => {
   const config = await getEffectiveEditableConfig();
   const localSettings = await loadLocalSettings();
   return {
@@ -868,7 +885,8 @@ ipcMain.handle('settings:get', async () => {
   };
 });
 
-ipcMain.handle('settings:save', async (_event, payload) => {
+registerTrustedIpcHandler('settings:save', async (_event, payload) => {
+  payload = validateSettingsPayload(payload, EDITABLE_CONFIG_KEYS);
   const previous = await loadLocalSettings();
   const source = payload?.config && typeof payload.config === 'object' ? payload.config : payload;
   const changedSensitiveKeys = SENSITIVE_CONFIG_KEYS.filter((key) => {
@@ -886,32 +904,30 @@ ipcMain.handle('settings:save', async (_event, payload) => {
   };
 });
 
-ipcMain.handle('rpc-limiter:send-settings', async (_event, payload) => {
-  return await sendSettingsToRpcLimiter(await resolveSubmittedConfig(payload || {}));
+registerTrustedIpcHandler('rpc-limiter:send-settings', async (_event, payload) => {
+  const validated = validateSettingsPayload(payload, EDITABLE_CONFIG_KEYS, { allowAssetRules: false });
+  return await sendSettingsToRpcLimiter(await resolveSubmittedConfig(validated));
 });
 
-ipcMain.handle('rpc-limiter:get-status', async () => getRpcLimiterStatus());
+registerTrustedIpcHandler('rpc-limiter:get-status', async () => getRpcLimiterStatus());
 
-ipcMain.handle('bot:start', async () => {
+registerTrustedIpcHandler('bot:start', async () => {
   await startBotFromSettings();
   return { running: botRunning };
 });
 
-ipcMain.handle('bot:stop', async () => {
+registerTrustedIpcHandler('bot:stop', async () => {
   await stopBot();
   return { running: botRunning };
 });
 
-ipcMain.handle('bot:apply-running-settings', async (_event, payload) => {
+registerTrustedIpcHandler('bot:apply-running-settings', async (_event, payload) => {
+  const { assets: requestedAssets } = validateAssetsPayload(payload);
   if (!bot || !botRunning) {
     return { ok: false, status: 'bot_not_running' };
   }
 
   const newConfig = await applyRunningSettingsToBot();
-  const requestedAssets = Array.isArray(payload?.assets)
-    ? payload.assets.map((asset) => String(asset || '').trim()).filter(Boolean)
-    : [];
-
   if (!requestedAssets.length) {
     return { ok: true, status: 'config_applied', assets: [] };
   }
@@ -919,14 +935,8 @@ ipcMain.handle('bot:apply-running-settings', async (_event, payload) => {
   return rerunAssetGroups(newConfig, requestedAssets);
 });
 
-ipcMain.handle('bot:cancel-order', async (_event, payload) => {
-  const asset = String(payload?.asset ?? '').trim();
-  const side = payload?.side === 'buy' ? 'buy' : 'sell';
-
-  if (!asset) {
-    logger.error('Cancel order failed: asset is required');
-    return { ok: false, status: 'invalid_request', asset, side };
-  }
+registerTrustedIpcHandler('bot:cancel-order', async (_event, payload) => {
+  const { asset, side } = validateCancelOrderPayload(payload);
 
   if (!bot || !botRunning) {
     logger.warn(`Cancel order requested for ${asset} [${side}] but bot is not running`);
@@ -947,16 +957,16 @@ ipcMain.handle('bot:cancel-order', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('bot:rerun-assets', async (_event, assets) => {
+registerTrustedIpcHandler('bot:rerun-assets', async (_event, assets) => {
   if (!bot || !botRunning) {
     return { ok: false, status: 'bot_not_running' };
   }
 
   const newConfig = await applyRunningSettingsToBot();
-  return rerunAssetGroups(newConfig, assets);
+  return rerunAssetGroups(newConfig, validateAssetList(assets));
 });
 
-ipcMain.handle('bot:status', async () => {
+registerTrustedIpcHandler('bot:status', async () => {
   if (!bot) {
     return getEmptyStatusSnapshot();
   }
@@ -969,11 +979,11 @@ ipcMain.handle('bot:status', async () => {
   }
 });
 
-ipcMain.handle('updates:check', async () => {
+registerTrustedIpcHandler('updates:check', async () => {
   return await checkForUpdates();
 });
 
-ipcMain.handle('updates:download-and-restart', async () => {
+registerTrustedIpcHandler('updates:download-and-restart', async () => {
   return await downloadUpdateAndRestart();
 });
 
