@@ -10,6 +10,7 @@ const fields = [
   'RELEVANT_BUY_ORDER_PCT',
   'RELEVANT_SELL_ORDER_PCT',
 ];
+const secureFieldNames = new Set(['AEPHIA_API_KEY', 'RPC_URL', 'RPC_URL_FALLBACK', 'HOT_WALLET_SECRET']);
 
 const STATUS_POLL_MS = 60000;
 const AUTO_RERUN_COOLDOWN_MS = 120000;
@@ -202,7 +203,7 @@ function maybeCheckForUpdatesAfterCycle(snapshot) {
 function setSensitiveVisible(visible) {
   sensitiveVisible = visible;
   form.classList.toggle('sensitive-hidden', !visible);
-  toggleSensitiveBtn.textContent = visible ? 'Hide Sensitive Fields' : 'Show Sensitive Fields';
+  toggleSensitiveBtn.textContent = visible ? 'Hide Current RPC Limiter URL' : 'Show Current RPC Limiter URL';
 }
 
 function setActiveTab(tabName) {
@@ -614,13 +615,18 @@ function readFormConfig() {
   return data;
 }
 
-function writeFormConfig(config) {
+function writeFormConfig(config, secureSettingsStatus = {}) {
   assetRegistryResourceList = String(config?.RESOURCE_LIST ?? '');
   for (const key of fields) {
     const element = form.elements.namedItem(key);
     if (element) {
       if (element.type === 'checkbox') {
         element.checked = parseBoolean(config[key]);
+      } else if (secureFieldNames.has(key)) {
+        element.value = '';
+        element.placeholder = secureSettingsStatus[key]
+          ? 'Stored securely — enter a new value to replace'
+          : 'Enter a value to store securely';
       } else {
         element.value = config[key] ?? '';
       }
@@ -1199,6 +1205,7 @@ async function saveAllSettings() {
     assetRules: assetRuleRows,
   };
   const result = await window.botApi.saveSettings(payload);
+  writeFormConfig(result.config || {}, result.secureSettingsStatus || {});
   renderRpcLimiterStatus(result.rpcLimiter);
   assetRuleRows = Array.isArray(result.assetRules) ? normalizeAssetRuleRows(result.assetRules) : assetRuleRows;
   return result;
@@ -1206,7 +1213,7 @@ async function saveAllSettings() {
 
 async function boot() {
   const state = await window.botApi.getSettings();
-  writeFormConfig(state.config);
+  writeFormConfig(state.config, state.secureSettingsStatus || {});
   renderRpcLimiterStatus(state.rpcLimiter);
   assetRuleRows = Array.isArray(state.assetRules) && state.assetRules.length ? normalizeAssetRuleRows(state.assetRules) : buildDefaultAssetRuleRows();
   ensureAssetRuleRows();

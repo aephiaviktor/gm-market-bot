@@ -25,10 +25,16 @@ function redactConfigForRenderer(config = {}) {
   const redacted = { ...config };
   for (const key of SENSITIVE_CONFIG_KEYS) {
     if (Object.prototype.hasOwnProperty.call(redacted, key)) {
-      redacted[key] = String(redacted[key] ?? '').trim() ? REDACTED_VALUE : '';
+      redacted[key] = '';
     }
   }
   return redacted;
+}
+
+function getSensitiveConfigStatus(config = {}) {
+  return Object.fromEntries(
+    SENSITIVE_CONFIG_KEYS.map((key) => [key, Boolean(String(config[key] ?? '').trim())]),
+  );
 }
 
 function mergeSensitiveConfig(stored = {}, submitted = {}) {
@@ -44,6 +50,7 @@ function mergeSensitiveConfig(stored = {}, submitted = {}) {
 module.exports = {
   REDACTED_VALUE,
   SENSITIVE_CONFIG_KEYS,
+  getSensitiveConfigStatus,
   mergeSensitiveConfig,
   redactConfigForRenderer,
   splitSensitiveConfig,

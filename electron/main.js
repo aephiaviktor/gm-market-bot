@@ -11,6 +11,7 @@ const { compareVersions, dependencySpecsChanged, normalizeVersion, scheduleRelau
 const {
   REDACTED_VALUE,
   SENSITIVE_CONFIG_KEYS,
+  getSensitiveConfigStatus,
   mergeSensitiveConfig,
   redactConfigForRenderer,
   splitSensitiveConfig,
@@ -860,6 +861,7 @@ ipcMain.handle('settings:get', async () => {
   const localSettings = await loadLocalSettings();
   return {
     config: redactConfigForRenderer(config),
+    secureSettingsStatus: getSensitiveConfigStatus(config),
     rpcLimiter: getRpcLimiterStatus(),
     running: botRunning,
     assetRules: normalizeAssetRules(localSettings.ASSET_RULE_ROWS ?? []),
@@ -877,6 +879,7 @@ ipcMain.handle('settings:save', async (_event, payload) => {
   const config = await getEffectiveEditableConfig();
   return {
     config: redactConfigForRenderer(config),
+    secureSettingsStatus: getSensitiveConfigStatus(config),
     rpcLimiter: getRpcLimiterStatus(),
     assetRules: normalizeAssetRules(saved.ASSET_RULE_ROWS),
     changedSensitiveKeys,
