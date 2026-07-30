@@ -45,8 +45,10 @@ const updateCancelBtn = document.getElementById('update-cancel-btn');
 const addRuleRowBtn = document.getElementById('add-rule-row-btn');
 const toggleSensitiveBtn = document.getElementById('toggle-sensitive-btn');
 const sendRpcLimiterBtn = document.getElementById('send-rpc-limiter-btn');
-const rpcLimiterCurrentUrlEl = document.getElementById('rpc-limiter-current-url');
+const rpcLimiterMainUrlEl = document.getElementById('rpc-limiter-main-url');
+const rpcLimiterFallbackUrlEl = document.getElementById('rpc-limiter-fallback-url');
 const rpcLimiterStatePathEl = document.getElementById('rpc-limiter-state-path');
+const rpcLimiterActiveEl = document.getElementById('rpc-limiter-active');
 const rpcLimiterUpdatedEl = document.getElementById('rpc-limiter-updated');
 const assetRulesBody = document.getElementById('asset-rules-body');
 let assetRegistryResourceList = '';
@@ -675,14 +677,33 @@ function updateRpcLimiterModeTone() {
 
 function renderRpcLimiterStatus(status) {
   if (!status) {
-    rpcLimiterCurrentUrlEl.value = '';
+    rpcLimiterMainUrlEl.value = '';
+    rpcLimiterFallbackUrlEl.value = '';
     rpcLimiterStatePathEl.textContent = '—';
+    rpcLimiterActiveEl.textContent = '';
     rpcLimiterUpdatedEl.textContent = '';
     return;
   }
 
-  rpcLimiterCurrentUrlEl.value = status.currentRpcUrl || '';
+  rpcLimiterMainUrlEl.value = status.providers?.main?.url || '';
+  rpcLimiterFallbackUrlEl.value = status.providers?.fallback?.url || '';
   rpcLimiterStatePathEl.textContent = status.path || '—';
+
+  const activeParts = [];
+  if (status.activeProvider) {
+    activeParts.push(`active: ${status.activeProvider}`);
+  }
+  if (status.providers?.main?.cooldown) {
+    activeParts.push('main: cooldown');
+  }
+  if (status.providers?.fallback?.cooldown) {
+    activeParts.push('fallback: cooldown');
+  }
+  if (status.providers?.main?.cooldown && status.providers?.fallback?.cooldown) {
+    activeParts.push('⚠ both providers in cooldown');
+  }
+  rpcLimiterActiveEl.textContent = activeParts.join(' · ');
+
   const updatedParts = [];
   if (status.updatedBy) {
     updatedParts.push(`updated by ${status.updatedBy}`);
