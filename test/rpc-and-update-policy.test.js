@@ -11,6 +11,7 @@ const {
 const {
   buildWindowsDependencyUpdateScript,
   compareVersions,
+  dependencyInstallRequired,
   dependencySpecsChanged,
   normalizeVersion,
   scheduleRelaunch,
@@ -142,6 +143,27 @@ test('updater installs dependencies only when dependency specifications change',
     dependencies: current.dependencies,
     devDependencies: { ...current.devDependencies, gamma: '^3.0.0' },
   }), true);
+});
+
+test('updater installs dependencies when the lockfile changes under an unchanged git dependency', () => {
+  const packageJson = {
+    dependencies: {
+      rpc_limiter: 'git+https://github.com/aephiaviktor/rpc-limiter.git#main',
+    },
+  };
+
+  assert.equal(dependencyInstallRequired(
+    packageJson,
+    packageJson,
+    '{"resolved":"#old-commit"}',
+    '{"resolved":"#new-commit"}',
+  ), true);
+  assert.equal(dependencyInstallRequired(
+    packageJson,
+    packageJson,
+    '{"resolved":"#same-commit"}',
+    '{"resolved":"#same-commit"}',
+  ), false);
 });
 
 test('Windows dependency updater waits for Electron to exit before replacing packages', () => {

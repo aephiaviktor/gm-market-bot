@@ -10,7 +10,7 @@ const stableIcon = require('./lib/stable-icon');
 const {
   buildWindowsDependencyUpdateScript,
   compareVersions,
-  dependencySpecsChanged,
+  dependencyInstallRequired,
   normalizeVersion,
   scheduleRelaunch,
 } = require('./update-policy');
@@ -356,7 +356,16 @@ async function downloadUpdateAndRestart() {
 
   const extractedRoot = path.join(tempDir, extracted.name);
   const nextPackage = JSON.parse(await fs.readFile(path.join(extractedRoot, 'package.json'), 'utf8'));
-  const installDependencies = dependencySpecsChanged(currentPackage, nextPackage);
+  const [currentLockfile, nextLockfile] = await Promise.all([
+    fs.readFile(path.join(appRoot, 'package-lock.json'), 'utf8').catch(() => ''),
+    fs.readFile(path.join(extractedRoot, 'package-lock.json'), 'utf8').catch(() => ''),
+  ]);
+  const installDependencies = dependencyInstallRequired(
+    currentPackage,
+    nextPackage,
+    currentLockfile,
+    nextLockfile,
+  );
   emitUpdateProgress('copying', 'Installing updated application files...');
   await fs.cp(extractedRoot, appRoot, {
     recursive: true,

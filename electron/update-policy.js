@@ -29,6 +29,11 @@ function dependencySpecsChanged(currentPackage, nextPackage) {
     !== JSON.stringify(normalizeDependencySpecs(nextPackage));
 }
 
+function dependencyInstallRequired(currentPackage, nextPackage, currentLockfile, nextLockfile) {
+  return dependencySpecsChanged(currentPackage, nextPackage)
+    || String(currentLockfile || '') !== String(nextLockfile || '');
+}
+
 function quotePowerShellLiteral(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -86,6 +91,7 @@ function scheduleRelaunch(app, delayMs = 750, schedule = setTimeout) {
 module.exports = {
   buildWindowsDependencyUpdateScript,
   compareVersions,
+  dependencyInstallRequired,
   dependencySpecsChanged,
   normalizeVersion,
   scheduleRelaunch,
