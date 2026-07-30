@@ -110,6 +110,32 @@ class RpcRequestRateLimiter {
 
     await next;
   }
+
+  /**
+   * Wait on the shared limiter and return the provider it picked. Returns
+   * `null` when the shared limiter is disabled (useSharedLimiter() === false),
+   * in which case the caller should fall back to its default (main) provider.
+   */
+  async waitForProvider(
+    label: string,
+    bucketName: 'rpc:shared' | 'tx:shared' = 'rpc:shared',
+    method: string = label,
+  ): Promise<{ provider: 'main' | 'fallback' } | null> {
+    if (!this.useSharedLimiter()) return null;
+    return await this.sharedLimiter.wait(bucketName, {
+      label,
+      metrics: {
+        app: this.metricsApp,
+        profile: this.metricsProfile,
+        method,
+      },
+    });
+  }
+
+  /** Expose the shared limiter so callers can report 429s back to it. */
+  getSharedLimiter(): RpcLimiter | null {
+    return this.useSharedLimiter() ? this.sharedLimiter : null;
+  }
 }
 
 function getErrorText(error: unknown): string {
@@ -237,28 +263,69 @@ function createFailoverConnection(
           }
         }
 
-        const invokePrimary = () => callRpcWithRateLimitRetry(
+        // Provider-aware dispatch: when the shared limiter is enabled, ask
+        // it which provider to use and dispatch to that Connection. On a
+        // 429, report it back so the provider goes into cooldown. If the
+        // shared limiter is disabled, default to 'main' (existing behavior).
+        const sharedLimiter = limiter.getSharedLimiter();
+        let pickedProvider: 'main' | 'fallback' = 'main';
+        if (sharedLimiter) {
+          try {
+            const pick = await limiter.waitForProvider(label, bucketName, method);
+            if (pick) pickedProvider = pick.provider;
+          } catch (waitError) {
+            // Shared-limiter wait failed (deadline, timeout). Fall through
+            // to default provider rather than blowing up the call.
+            logger.warn(`Shared limiter wait failed for ${label}, defaulting to main.`, waitError);
+          }
+        }
+
+        const usePickedAsPrimary = pickedProvider === 'main';
+        const pickedTarget = usePickedAsPrimary ? target : fallback ?? target;
+        const pickedValueBound = usePickedAsPrimary ? primaryValue : (fallbackValue ?? primaryValue);
+        const otherTarget = usePickedAsPrimary ? (fallback ?? target) : target;
+        const otherValueBound = usePickedAsPrimary ? (fallbackValue ?? primaryValue) : primaryValue;
+        const otherLabel = usePickedAsPrimary
+          ? `fallback Connection.${String(prop)}()`
+          : `main Connection.${String(prop)}()`;
+
+        const invokePicked = () => callRpcWithRateLimitRetry(
           label,
-          () => primaryValue.apply(target, args),
+          () => pickedValueBound.apply(pickedTarget, args),
           limiter,
           logger,
           bucketName,
           method,
         );
 
-        const resultPromise = !fallback || typeof fallbackValue !== 'function'
-          ? invokePrimary()
+        const hasOther = otherTarget !== pickedTarget && typeof otherValueBound === 'function';
+        const resultPromise = !hasOther
+          ? invokePicked()
           : callRpcWithFallback(
-            invokePrimary,
+            invokePicked,
             () => callRpcWithRateLimitRetry(
-              `fallback Connection.${String(prop)}()`,
-              () => fallbackValue.apply(fallback, args),
+              otherLabel,
+              () => otherValueBound.apply(otherTarget, args),
               limiter,
               logger,
               bucketName,
               method,
             ),
-            (error) => logger.warn(`Primary RPC failed for Connection.${String(prop)}(), trying fallback RPC.`, error),
+            async (error) => {
+              logger.warn(
+                `Provider ${pickedProvider} failed for ${label}, trying other provider.`,
+                error,
+              );
+              // Report 429s back to the shared limiter so the failed provider
+              // goes into cooldown and the next call routes to the other one.
+              if (sharedLimiter && isRpcRateLimitError(error)) {
+                try {
+                  await sharedLimiter.recordProviderOutcome(pickedProvider, 'rate_limited');
+                } catch (reportError) {
+                  logger.warn(`Failed to record provider outcome for ${pickedProvider}.`, reportError);
+                }
+              }
+            },
           );
 
         // Populate the per-cycle getSlot() cache on success so subsequent
