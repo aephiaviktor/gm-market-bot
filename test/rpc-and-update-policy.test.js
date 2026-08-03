@@ -229,6 +229,21 @@ test('Windows dependency updater waits for Electron to exit before replacing pac
   assert.ok(script.indexOf('Wait-Process') < script.indexOf('npm.cmd'));
 });
 
+test('Windows dependency updater waits for the supervisor task to become Ready before restarting', () => {
+  const script = buildWindowsDependencyUpdateScript({
+    appRoot: 'C:\\Apps\\gm-market-bot',
+    parentPid: 4321,
+  });
+
+  assert.match(script, /Get-ScheduledTask -TaskName \$taskName/);
+  assert.match(script, /\.State/);
+  assert.match(script, /-eq "Ready"/);
+  assert.match(script, /AddSeconds\(30\)/);
+  assert.match(script, /Start-Sleep -Milliseconds 250/);
+  assert.match(script, /Timed out waiting for scheduled task/);
+  assert.ok(script.indexOf('Get-ScheduledTask') < script.indexOf('Invoke-UpdateCommand "schtasks.exe"'));
+});
+
 test('Windows dependency updater rejects an invalid parent process id', () => {
   assert.throws(() => buildWindowsDependencyUpdateScript({
     appRoot: 'C:\\Apps\\gm-market-bot',
