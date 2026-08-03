@@ -88,3 +88,13 @@ test('configured secure fields explain how to replace their hidden value', () =>
   assert.match(renderer, /Show RPC URL/);
   assert.match(renderer, /if \(nextTab === 'setup'\) \{\s*setSensitiveVisible\(false\);\s*\}/);
 });
+
+test('RPC limiter send serializes the role explicitly and does not hydrate its blank URL', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'electron', 'renderer.js'), 'utf8');
+
+  assert.match(renderer, /providerRole\s*=.*checked[\s\S]*?\? 'fallback'[\s\S]*?: 'main'/);
+  assert.match(renderer, /sendSettingsToRpcLimiter\(\{ config: readFormConfig\(\), providerRole \}\)/);
+  assert.doesNotMatch(main, /sendSettingsToRpcLimiter\(await resolveSubmittedConfig/);
+  assert.match(main, /sendSettingsToRpcLimiter\(validated\)/);
+});

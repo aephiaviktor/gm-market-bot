@@ -325,9 +325,8 @@ function createFailoverConnection(
             const pick = await limiter.waitForProvider(label, bucketName, method);
             if (pick) pickedProvider = pick.provider;
           } catch (waitError) {
-            // Shared-limiter wait failed (deadline, timeout). Fall through
-            // to default provider rather than blowing up the call.
-            logger.warn(`Shared limiter wait failed for ${label}, defaulting to main.`, waitError);
+            logger.error(`Shared limiter wait failed for ${label}.`, waitError);
+            throw waitError;
           }
         }
 
