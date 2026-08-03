@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   classifyOrderFillEvents,
   normalizeLoadedState,
+  removeTrackedOrder,
 } = require('../dist/bot');
 
 const MINT = 'FeorejFjRRAfusN9Fg3WjEZ1dRCf74o6xwT5vDt3R34J';
@@ -63,4 +64,32 @@ test('fill classification reports partial and full fills while suppressing cance
 test('an unchanged open order does not produce a fill event', () => {
   const previous = { 'order-1': { price: 1.25, remaining: 10, quantity: 10 } };
   assert.deepEqual(classifyOrderFillEvents(previous, [order('order-1', 10, 1.25, 10)], new Set()), []);
+});
+
+test('confirmed cancellation removes the tracked order from durable state', () => {
+  const state = {
+    [MINT]: {
+      buy: {
+        openOrders: {
+          cancelled: { price: 1.25, remaining: 10, quantity: 10 },
+          retained: { price: 1.1, remaining: 5, quantity: 5 },
+        },
+        lastWalletBalance: 42,
+      },
+      sell: { openOrders: {} },
+    },
+  };
+
+  assert.equal(removeTrackedOrder(state, MINT, 'buy', 'cancelled'), true);
+  assert.deepEqual(state[MINT].buy, {
+    openOrders: { retained: { price: 1.1, remaining: 5, quantity: 5 } },
+    lastWalletBalance: 42,
+  });
+  assert.equal(removeTrackedOrder(state, MINT, 'buy', 'missing'), false);
+});
+
+test('buy replacement carries cancellation suppression into post-placement reconciliation', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
+  assert.match(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, cancelledIds, quoteMint\)/);
+  assert.doesNotMatch(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, new Set<string>\(\), quoteMint\)/);
 });

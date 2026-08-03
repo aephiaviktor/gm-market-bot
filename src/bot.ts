@@ -1416,6 +1416,20 @@ export function classifyOrderFillEvents(
   return events;
 }
 
+export function removeTrackedOrder(
+  state: BotState,
+  mintKey: string,
+  side: AssetRuleSide,
+  orderId: string,
+): boolean {
+  const sideState = getSideState(ensureResourceState(state, mintKey), side);
+  if (!Object.prototype.hasOwnProperty.call(sideState.openOrders, orderId)) {
+    return false;
+  }
+  delete sideState.openOrders[orderId];
+  return true;
+}
+
 export function getRuleExecutionPolicy(
   rule: Pick<AssetRuleConfig, 'enabled'>,
   currentOrders: Array<Pick<Order, 'id'>>,
@@ -1979,6 +1993,13 @@ export class GmMarketBot {
     cancelledIds.add(order.id);
     this.recentlyCancelledOrderIds.add(order.id);
 
+    // A confirmed cancellation is terminal. Remove it from durable tracking
+    // before replacement placement or later reconciliation can fail. This
+    // prevents a restart from reclassifying the cancelled disappearance as a
+    // full fill.
+    removeTrackedOrder(this.state, resource.mint.toBase58(), side, order.id);
+    await this.saveState();
+
     await this.appendLog({
       event: 'CANCEL',
       side,
@@ -2434,7 +2455,7 @@ export class GmMarketBot {
     }
 
     await this.cancelOrder(activeOrder, resource, 'buy', cancelledIds);
-    await this.placeOrder(resource, 'buy', targetPrice, targetQuantity, new Set<string>(), quoteMint);
+    await this.placeOrder(resource, 'buy', targetPrice, targetQuantity, cancelledIds, quoteMint);
   }
 
   private async processLegacyResource(resource: ResourceConfig) {
