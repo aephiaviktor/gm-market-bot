@@ -92,6 +92,12 @@ test('renderer CSP permits only packaged scripts and styles', () => {
   assert.doesNotMatch(html, /script-src[^;]*'unsafe-inline'/);
 });
 
+test('update dialog identifies the official GitHub Releases channel', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../electron/renderer.html'), 'utf8');
+  assert.match(html, /Official release channel: GitHub Releases/);
+  assert.match(html, /Latest official release/);
+});
+
 test('renderer builds dynamic content without innerHTML injection sinks', () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../electron/renderer.js'), 'utf8');
   assert.doesNotMatch(renderer, /\.innerHTML\s*=/);

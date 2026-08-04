@@ -987,9 +987,16 @@ button:disabled {
   color: #f4fbff;
 }
 
+.update-channel {
+  margin: 12px 0 0;
+  color: #86c9ff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .update-message {
   min-height: 38px;
-  margin: 14px 0 0;
+  margin: 8px 0 0;
   color: #d7ebfb;
   font-size: 13px;
   line-height: 1.45;
