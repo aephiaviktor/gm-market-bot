@@ -1,7 +1,7 @@
 {
   "name": "gm-market-bot",
-  "version": "0.3.32",
-  "description": "",
+  "version": "0.3.33",
+  "description": "Desktop market automation for Star Atlas Galactic Marketplace",
   "main": "electron/main.js",
   "scripts": {
     "build": "tsc",
@@ -10,23 +10,67 @@
     "start": "npm run build && node dist/index.js",
     "dev:cli": "ts-node src/index.ts",
     "start:electron": "npm run build && electron .",
-    "dev": "npm run start:electron"
+    "dev": "npm run start:electron",
+    "dist:win": "npm run build && electron-builder --win nsis --publish never",
+    "release:win": "npm run build && electron-builder --win nsis --publish always"
   },
   "keywords": [],
-  "author": "",
+  "author": "Aephia",
   "license": "ISC",
   "dependencies": {
     "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.98.4",
     "@staratlas/factory": "^0.7.1",
     "bs58": "^6.0.0",
+    "electron-updater": "^6.8.9",
     "proper-lockfile": "^4.1.2",
-    "rpc_limiter": "git+https://github.com/aephiaviktor/rpc-limiter.git#main"
+    "rpc_limiter": "git+https://github.com/aephiaviktor/rpc-limiter.git#main",
+    "semver": "^7.8.5"
   },
   "devDependencies": {
     "@types/node": "^25.9.5",
     "electron": "^42.7.1",
+    "electron-builder": "^26.15.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "com.aephia.gm-market-bot",
+    "productName": "GM Market Bot",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "electron/assets/market_bot_icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "aephiaviktor",
+        "repo": "gm-market-bot",
+        "releaseType": "draft"
+      }
+    ]
   }
 }

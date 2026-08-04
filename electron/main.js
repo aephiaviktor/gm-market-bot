@@ -2,18 +2,11 @@ const { app, BrowserWindow, ipcMain, Menu, dialog, powerSaveBlocker, safeStorage
 const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
-const os = require('os');
-const { spawn } = require('child_process');
 const lockfile = require('proper-lockfile');
 const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
-const {
-  buildWindowsDependencyUpdateScript,
-  compareVersions,
-  dependencyInstallRequired,
-  normalizeVersion,
-  scheduleRelaunch,
-} = require('./update-policy');
+const { autoUpdater } = require('electron-updater');
+const { determineReleaseAction } = require('./release-update-policy');
 const {
   REDACTED_VALUE,
   SENSITIVE_CONFIG_KEYS,
@@ -43,6 +36,7 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 const { resolvePaths } = require('rpc_limiter');
 const { readState: readRpcLimiterState, writeStateSync: writeRpcLimiterStateSync, bumpRevision: bumpRpcLimiterRevision } = require('rpc_limiter/dist/state');
 const { applyRpcLimiterSettings, resolveLimiterConnectionUrls } = require('./rpc-limiter-settings-policy');
+const { migrateLegacyRuntimeData, resolveRuntimeDataDir } = require('./runtime-data-policy');
 const { GmMarketBot, buildBotConfig, getEditableConfigFromEnv, EDITABLE_CONFIG_KEYS } = require('../dist/bot');
 const { formatAssetRegistryResourceList, loadAssetRegistryForAephiaKey } = require('../dist/asset-registry');
 
@@ -54,8 +48,7 @@ const recentLogs = [];
 const AEPHIA_TOKEN_VALIDATE_URL = 'https://api.aephia.com/token/validate';
 const AEPHIA_API_KEY_VALIDATION_BYPASS = false; // Re-enable Aephia token validation.
 const GITHUB_REPO = 'aephiaviktor/gm-market-bot';
-const GITHUB_MAIN_PACKAGE_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/package.json`;
-const GITHUB_MAIN_ARCHIVE_URL = `https://github.com/${GITHUB_REPO}/archive/refs/heads/main.tar.gz`;
+const GITHUB_LATEST_RELEASE_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 const APP_DISPLAY_NAME = 'GM Market Bot';
 const APP_USER_MODEL_ID = 'com.aephia.gm-market-bot';
 const RPC_LIMITER_UPDATED_BY = 'GM Market Bot';
@@ -138,8 +131,15 @@ function serializeCrashValue(value) {
   return value;
 }
 
+function getRuntimeDataDir() {
+  return resolveRuntimeDataDir({
+    localAppData: process.env.LOCALAPPDATA,
+    userData: app.getPath('userData'),
+  });
+}
+
 function logCrashEvent(type, details = {}) {
-  const logPath = path.join(getAppRoot(), 'analysis', 'crash-events.jsonl');
+  const logPath = path.join(getRuntimeDataDir(), 'crash-events.jsonl');
   const event = {
     timestamp: new Date().toISOString(),
     app: APP_DISPLAY_NAME,
@@ -208,118 +208,33 @@ function installCrashEventLogging() {
   });
 }
 
-async function readPackageVersion() {
-  const raw = await fs.readFile(path.join(getAppRoot(), 'package.json'), 'utf8');
-  return JSON.parse(raw).version;
-}
-
-async function fetchGithubJson(url) {
-  const response = await fetch(url, {
+async function fetchLatestOfficialRelease() {
+  const response = await fetch(GITHUB_LATEST_RELEASE_API_URL, {
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'gm-market-bot-updater',
     },
   });
   if (!response.ok) {
-    throw new Error(`GitHub request failed: HTTP ${response.status}`);
+    throw new Error(`GitHub Releases request failed: HTTP ${response.status}`);
   }
-  return await response.json();
-}
-
-async function getLatestGithubVersion() {
-  const remotePackage = await fetchGithubJson(GITHUB_MAIN_PACKAGE_URL);
-  const version = normalizeVersion(remotePackage?.version);
-
-  if (!version) {
-    throw new Error('No package version found on GitHub main.');
-  }
-
-  return {
-    version,
-    branch: 'main',
-    url: `https://github.com/${GITHUB_REPO}/tree/main`,
-    tarballUrl: GITHUB_MAIN_ARCHIVE_URL,
-  };
+  const release = await response.json();
+  const version = String(release?.tag_name || '').trim().replace(/^v/i, '');
+  if (!version) throw new Error('The latest published GitHub Release has no version tag.');
+  return { version, url: release.html_url || `https://github.com/${GITHUB_REPO}/releases/latest` };
 }
 
 async function checkForUpdates() {
-  const currentVersion = await readPackageVersion();
-  const latest = await getLatestGithubVersion();
+  const currentVersion = APP_VERSION;
+  const latest = await fetchLatestOfficialRelease();
+  const decision = determineReleaseAction(currentVersion, latest.version);
   return {
-    currentVersion,
-    latestVersion: latest.version,
-    latestBranch: latest.branch,
-    updateAvailable: compareVersions(latest.version, currentVersion) > 0,
+    currentVersion: decision.currentVersion,
+    latestVersion: decision.latestVersion,
+    updateAvailable: decision.action !== 'none',
+    restoreOfficial: decision.action === 'restore',
     releaseUrl: latest.url,
   };
-}
-
-function runCommand(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd || getAppRoot(),
-      shell: process.platform === 'win32',
-      windowsHide: true,
-    });
-
-    let output = '';
-    child.stdout.on('data', (chunk) => {
-      output += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      output += chunk.toString();
-    });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(output);
-      } else {
-        reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}: ${output.slice(-2000)}`));
-      }
-    });
-  });
-}
-
-async function launchWindowsDependencyUpdater(appRoot, tempDir) {
-  const scriptPath = path.join(tempDir, 'finish-update.ps1');
-  const script = buildWindowsDependencyUpdateScript({
-    appRoot,
-    parentPid: process.pid,
-  });
-  await fs.writeFile(scriptPath, script, 'utf8');
-
-  const powerShell = path.join(
-    process.env.SystemRoot || 'C:\\Windows',
-    'System32',
-    'WindowsPowerShell',
-    'v1.0',
-    'powershell.exe',
-  );
-  const child = spawn(powerShell, [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    scriptPath,
-  ], {
-    cwd: appRoot,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
-  child.unref();
-}
-
-async function downloadFile(url, targetPath) {
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'gm-market-bot-updater' },
-  });
-  if (!response.ok) {
-    throw new Error(`Download failed: HTTP ${response.status}`);
-  }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await fs.writeFile(targetPath, buffer);
 }
 
 function emitUpdateProgress(stage, message) {
@@ -329,10 +244,13 @@ function emitUpdateProgress(stage, message) {
 }
 
 async function downloadUpdateAndRestart() {
-  const latest = await getLatestGithubVersion();
-  const currentVersion = await readPackageVersion();
-  if (compareVersions(latest.version, currentVersion) <= 0) {
-    return { updated: false, currentVersion, latestVersion: latest.version };
+  if (!app.isPackaged) {
+    throw new Error('Release updates are available only in the packaged application.');
+  }
+
+  const update = await checkForUpdates();
+  if (!update.updateAvailable) {
+    return { updated: false, currentVersion: update.currentVersion, latestVersion: update.latestVersion };
   }
 
   if (botRunning) {
@@ -340,64 +258,40 @@ async function downloadUpdateAndRestart() {
     await stopBot();
   }
 
-  const appRoot = getAppRoot();
-  const currentPackage = JSON.parse(await fs.readFile(path.join(appRoot, 'package.json'), 'utf8'));
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gm-market-bot-update-'));
-  const archivePath = path.join(tempDir, `${latest.branch || 'main'}.tar.gz`);
-  emitUpdateProgress('downloading', `Downloading GM Market Bot v${latest.version}...`);
-  await downloadFile(latest.tarballUrl, archivePath);
-  emitUpdateProgress('extracting', 'Extracting the update...');
-  await runCommand('tar', ['-xzf', archivePath, '-C', tempDir], { cwd: tempDir });
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.allowDowngrade = update.restoreOfficial;
 
-  const entries = await fs.readdir(tempDir, { withFileTypes: true });
-  const extracted = entries.find((entry) => entry.isDirectory() && entry.name.startsWith('gm-market-bot-'));
-  if (!extracted) {
-    throw new Error('Downloaded update archive did not contain the expected project folder.');
-  }
+  const progressHandler = (progress) => {
+    const percent = Number.isFinite(progress?.percent) ? ` (${Math.floor(progress.percent)}%)` : '';
+    emitUpdateProgress('downloading', `Downloading official GM Market Bot v${update.latestVersion}${percent}...`);
+  };
+  autoUpdater.on('download-progress', progressHandler);
 
-  const extractedRoot = path.join(tempDir, extracted.name);
-  const nextPackage = JSON.parse(await fs.readFile(path.join(extractedRoot, 'package.json'), 'utf8'));
-  const [currentLockfile, nextLockfile] = await Promise.all([
-    fs.readFile(path.join(appRoot, 'package-lock.json'), 'utf8').catch(() => ''),
-    fs.readFile(path.join(extractedRoot, 'package-lock.json'), 'utf8').catch(() => ''),
-  ]);
-  const installDependencies = dependencyInstallRequired(
-    currentPackage,
-    nextPackage,
-    currentLockfile,
-    nextLockfile,
-  );
-  emitUpdateProgress('copying', 'Installing updated application files...');
-  await fs.cp(extractedRoot, appRoot, {
-    recursive: true,
-    force: true,
-    filter: (source) => {
-      const rel = path.relative(extractedRoot, source);
-      return !rel.startsWith('.git') && !rel.startsWith('node_modules') && !rel.startsWith('analysis');
-    },
-  });
-
-  if (installDependencies) {
-    if (process.platform === 'win32') {
-      emitUpdateProgress('dependencies', 'Restarting safely to update packages...');
-      await launchWindowsDependencyUpdater(appRoot, tempDir);
-      setTimeout(() => app.exit(0), 1250);
-      return {
-        updated: true,
-        currentVersion,
-        latestVersion: latest.version,
-        finishingDependencies: true,
-      };
+  try {
+    emitUpdateProgress(
+      'checking-release',
+      update.restoreOfficial
+        ? `Preparing restoration to official v${update.latestVersion}...`
+        : `Preparing update to official v${update.latestVersion}...`,
+    );
+    const result = await autoUpdater.checkForUpdates();
+    if (!result?.updateInfo || result.updateInfo.version !== update.latestVersion) {
+      throw new Error(`Official Release v${update.latestVersion} could not be selected by the packaged updater.`);
     }
-    emitUpdateProgress('dependencies', 'Dependencies changed; updating packages...');
-    await runCommand('npm', ['install', '--no-audit', '--no-fund'], { cwd: appRoot });
+    await autoUpdater.downloadUpdate();
+    emitUpdateProgress('restarting', `Official GM Market Bot v${update.latestVersion} downloaded. Restarting...`);
+    setTimeout(() => autoUpdater.quitAndInstall(false, true), 500);
+    return {
+      updated: true,
+      currentVersion: update.currentVersion,
+      latestVersion: update.latestVersion,
+      restoredOfficial: update.restoreOfficial,
+    };
+  } finally {
+    autoUpdater.off('download-progress', progressHandler);
   }
-  emitUpdateProgress('building', 'Building the updated application...');
-  await runCommand('npm', ['run', 'build'], { cwd: appRoot });
-
-  emitUpdateProgress('restarting', `GM Market Bot v${latest.version} installed. Restarting now...`);
-  scheduleRelaunch(app);
-  return { updated: true, currentVersion, latestVersion: latest.version };
 }
 
 function getAephiaApiKey(config) {
@@ -821,6 +715,7 @@ async function startBotFromSettings() {
   }
 
   const configInput = await getEffectiveBotInputConfig({ requireAssetRegistry: true });
+  configInput.ANALYSIS_DIR = getRuntimeDataDir();
   const config = buildBotConfig(configInput);
   bot = new GmMarketBot(config, logger);
   botRunning = true;
@@ -853,6 +748,7 @@ async function applyRunningSettingsToBot() {
   }
 
   const configInput = await getEffectiveBotInputConfig({ requireAssetRegistry: true });
+  configInput.ANALYSIS_DIR = getRuntimeDataDir();
   const newConfig = buildBotConfig(configInput);
 
   if (typeof bot.applyConfigUpdates === 'function') {
@@ -1058,6 +954,15 @@ registerTrustedIpcHandler('updates:download-and-restart', async () => {
 });
 
 app.whenReady().then(async () => {
+  const runtimeMigration = await migrateLegacyRuntimeData({
+    legacyDir: path.join(getAppRoot(), 'analysis'),
+    targetDir: getRuntimeDataDir(),
+    logger,
+  });
+  if (runtimeMigration.copied.length > 0) {
+    logger.info(`Migrated persistent runtime data: ${runtimeMigration.copied.join(', ')}`);
+  }
+
   const powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension')
   console.log(`[GM] prevent-app-suspension blocker=${powerSaveBlockerId} active=${powerSaveBlocker.isStarted(powerSaveBlockerId)}`)
 

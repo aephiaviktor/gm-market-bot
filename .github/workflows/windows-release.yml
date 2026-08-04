@@ -1,0 +1,37 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build Windows package without publishing
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: npm run dist:win
+      - name: Build and publish draft Release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: npm run release:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gm-market-bot-windows-${{ github.ref_name }}
+          path: |
+            release/*.exe
+            release/*.yml
+            release/*.blockmap

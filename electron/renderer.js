@@ -117,7 +117,9 @@ function renderUpdateButtonState(result, error = null) {
   const updateAvailable = Boolean(result?.updateAvailable);
   updateBtn.classList.toggle('update-available', updateAvailable);
   updateBtn.title = updateAvailable
-    ? `Update available: v${result.latestVersion}`
+    ? result?.restoreOfficial
+      ? `Restore official version: v${result.latestVersion}`
+      : `Update available: v${result.latestVersion}`
     : error
       ? 'Update check failed'
       : 'Check for updates';
@@ -135,8 +137,12 @@ function renderUpdateModalState(result, error = null) {
   }
 
   if (result?.updateAvailable) {
-    updateMessageEl.textContent = `A newer GM Market Bot version is available on GitHub.`;
-    updateConfirmBtn.textContent = `Update to v${result.latestVersion}`;
+    updateMessageEl.textContent = result.restoreOfficial
+      ? `This local build is newer than the latest official Release. Restore official v${result.latestVersion}?`
+      : `A newer official GM Market Bot Release is available.`;
+    updateConfirmBtn.textContent = result.restoreOfficial
+      ? `Restore official v${result.latestVersion}`
+      : `Update to v${result.latestVersion}`;
     return;
   }
 
@@ -152,8 +158,10 @@ async function openUpdateDialog() {
   updateCurrentVersionEl.textContent = `v${APP_VERSION}`;
   updateLatestVersionEl.textContent = cachedUpdate?.latestVersion ? `v${cachedUpdate.latestVersion}` : 'Checking...';
   updateMessageEl.textContent = cachedUpdate?.updateAvailable
-    ? 'A newer GM Market Bot version is available on GitHub.'
-    : 'Checking GitHub for the latest version...';
+    ? cachedUpdate.restoreOfficial
+      ? `Restore official GM Market Bot v${cachedUpdate.latestVersion}?`
+      : 'A newer official GM Market Bot Release is available.'
+    : 'Checking GitHub Releases for the latest official version...';
   updateConfirmBtn.textContent = 'Update';
   updateConfirmBtn.disabled = true;
   updateCancelBtn.disabled = false;
@@ -1350,9 +1358,10 @@ updateConfirmBtn.addEventListener('click', async () => {
   if (!availableUpdate?.updateAvailable) return;
   updateConfirmBtn.disabled = true;
   updateCancelBtn.disabled = true;
-  updateMessageEl.textContent = `Downloading GM Market Bot v${availableUpdate.latestVersion} and restarting...`;
+  const updateVerb = availableUpdate.restoreOfficial ? 'Restoring official' : 'Downloading official';
+  updateMessageEl.textContent = `${updateVerb} GM Market Bot v${availableUpdate.latestVersion} and restarting...`;
   appendLog(
-    `[${new Date().toISOString()}] [INFO] Downloading GM Market Bot v${availableUpdate.latestVersion} and restarting...`,
+    `[${new Date().toISOString()}] [INFO] ${updateVerb} GM Market Bot v${availableUpdate.latestVersion} and restarting...`,
   );
   try {
     const result = await window.botApi.downloadUpdateAndRestart();
