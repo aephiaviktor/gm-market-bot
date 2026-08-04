@@ -282,7 +282,7 @@ async function downloadUpdateAndRestart() {
     }
     await autoUpdater.downloadUpdate();
     emitUpdateProgress('restarting', `Official GM Market Bot v${update.latestVersion} downloaded. Restarting...`);
-    setTimeout(() => autoUpdater.quitAndInstall(false, true), 500);
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 500);
     return {
       updated: true,
       currentVersion: update.currentVersion,

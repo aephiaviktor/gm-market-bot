@@ -1,6 +1,6 @@
 {
   "name": "gm-market-bot",
-  "version": "0.3.34",
+  "version": "0.3.35",
   "description": "Desktop market automation for Star Atlas Galactic Marketplace",
   "main": "electron/main.js",
   "scripts": {
@@ -59,8 +59,8 @@
       "icon": "electron/assets/market_bot_icon.ico"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
