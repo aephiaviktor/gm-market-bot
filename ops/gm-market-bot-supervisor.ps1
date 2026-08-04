@@ -19,6 +19,19 @@ function Write-Log {
     Add-Content -Path $logFile -Value ("{0:o} {1}" -f (Get-Date), $Message)
 }
 
+function Test-TargetVersion {
+    param(
+        [string]$InstalledVersion,
+        [string]$TargetVersion
+    )
+    $installed = [version]$InstalledVersion
+    $target = [version]$TargetVersion
+    if ($installed.Major -ne $target.Major -or $installed.Minor -ne $target.Minor) { return $false }
+    if ($target.Build -ge 0 -and $installed.Build -ne $target.Build) { return $false }
+    if ($target.Revision -ge 0 -and $installed.Revision -ne $target.Revision) { return $false }
+    return $true
+}
+
 function Wait-ForUpdatedExecutable {
     param([string]$TargetVersion)
     $deadline = (Get-Date).AddSeconds($UpdateWaitSeconds)
@@ -26,7 +39,7 @@ function Wait-ForUpdatedExecutable {
         if (Test-Path $executable) {
             try {
                 $installedVersion = (Get-Item $executable).VersionInfo.ProductVersion
-                if (-not $TargetVersion -or ([version]$installedVersion -eq [version]$TargetVersion)) {
+                if (-not $TargetVersion -or (Test-TargetVersion -InstalledVersion $installedVersion -TargetVersion $TargetVersion)) {
                     return $true
                 }
             } catch {

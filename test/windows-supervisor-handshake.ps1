@@ -9,7 +9,9 @@ try {
     New-Item -ItemType Directory -Force -Path $appDir, $runtimeDir, $logDir | Out-Null
     $fakeExecutable = Join-Path $appDir 'GM Market Bot.exe'
     Copy-Item "$env:WINDIR\System32\whoami.exe" $fakeExecutable
-    $targetVersion = (Get-Item $fakeExecutable).VersionInfo.ProductVersion
+    $installedVersion = [version](Get-Item $fakeExecutable).VersionInfo.ProductVersion
+    $targetVersion = "$($installedVersion.Major).$($installedVersion.Minor).$($installedVersion.Build)"
+    if ($installedVersion.Revision -lt 0) { throw 'The test executable must expose a fourth version component.' }
 
     @{
         targetVersion = $targetVersion

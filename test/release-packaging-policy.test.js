@@ -15,7 +15,8 @@ test('Windows updater pins NSIS to the running install directory and delegates r
 test('canonical supervisor consumes the update marker and waits for the target executable version', () => {
   const supervisorSource = fs.readFileSync(path.join(__dirname, '../ops/gm-market-bot-supervisor.ps1'), 'utf8');
   assert.match(supervisorSource, /update-restart-requested\.json/);
-  assert.match(supervisorSource, /TargetVersion/);
+  assert.match(supervisorSource, /Test-TargetVersion/);
+  assert.match(supervisorSource, /target\.Revision -ge 0/);
   assert.match(supervisorSource, /Remove-Item/);
   assert.match(supervisorSource, /continue/);
 
