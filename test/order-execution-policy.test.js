@@ -56,3 +56,12 @@ test('serialized transaction queue recovers after a failed task', async () => {
   await assert.rejects(first.result, /submission failed/);
   assert.equal(await second.result, 'recovered');
 });
+
+test('multiple buy rules are reconciled independently while duplicate sells remain blocked', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
+
+  assert.match(source, /private async processBuyRules\(/);
+  assert.match(source, /if \(buyRules\.length > 1\) \{\s*await this\.processBuyRules\(/);
+  assert.doesNotMatch(source, /SKIP_DUPLICATE_BUY_RULES/);
+  assert.match(source, /SKIP_DUPLICATE_SELL_RULES/);
+});
