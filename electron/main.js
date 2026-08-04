@@ -7,6 +7,7 @@ const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
 const { autoUpdater } = require('electron-updater');
 const { determineReleaseAction } = require('./release-update-policy');
+const { getPackagedInstallDirectory, writeUpdateRestartRequest } = require('./update-restart-policy');
 const {
   REDACTED_VALUE,
   SENSITIVE_CONFIG_KEYS,
@@ -258,10 +259,12 @@ async function downloadUpdateAndRestart() {
     await stopBot();
   }
 
+  const installDirectory = getPackagedInstallDirectory(process.execPath);
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
   autoUpdater.allowDowngrade = update.restoreOfficial;
+  autoUpdater.installDirectory = installDirectory;
 
   const progressHandler = (progress) => {
     const percent = Number.isFinite(progress?.percent) ? ` (${Math.floor(progress.percent)}%)` : '';
@@ -281,8 +284,13 @@ async function downloadUpdateAndRestart() {
       throw new Error(`Official Release v${update.latestVersion} could not be selected by the packaged updater.`);
     }
     await autoUpdater.downloadUpdate();
+    writeUpdateRestartRequest({
+      runtimeDir: getRuntimeDataDir(),
+      targetVersion: update.latestVersion,
+      installDirectory,
+    });
     emitUpdateProgress('restarting', `Official GM Market Bot v${update.latestVersion} downloaded. Restarting...`);
-    setTimeout(() => autoUpdater.quitAndInstall(true, true), 500);
+    setTimeout(() => autoUpdater.quitAndInstall(true, false), 500);
     return {
       updated: true,
       currentVersion: update.currentVersion,
