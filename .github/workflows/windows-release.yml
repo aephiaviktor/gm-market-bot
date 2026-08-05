@@ -38,8 +38,8 @@ jobs:
           }
 
           $assets = @(
-            "release/GM-Market-Bot-Setup-$version.exe",
-            "release/GM-Market-Bot-Setup-$version.exe.blockmap",
+            "release/GM Market Bot Setup $version.exe",
+            "release/GM Market Bot Setup $version.exe.blockmap",
             "release/latest.yml"
           )
           foreach ($asset in $assets) {

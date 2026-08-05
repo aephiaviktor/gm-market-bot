@@ -34,8 +34,8 @@ test('tag workflow creates one draft before uploading the complete Windows asset
   assert.ok(createIndex >= 0, 'workflow must create the draft release explicitly');
   assert.ok(uploadIndex > createIndex, 'workflow must create the draft before uploading assets');
   assert.match(workflowSource, /--verify-tag/);
-  assert.match(workflowSource, /GM-Market-Bot-Setup-\$version\.exe/);
-  assert.match(workflowSource, /GM-Market-Bot-Setup-\$version\.exe\.blockmap/);
+  assert.match(workflowSource, /GM Market Bot Setup \$version\.exe/);
+  assert.match(workflowSource, /GM Market Bot Setup \$version\.exe\.blockmap/);
   assert.match(workflowSource, /latest\.yml/);
 });
 
