@@ -24,6 +24,21 @@ test('canonical supervisor consumes the update marker and waits for the target e
   assert.match(workflowSource, /test\/windows-supervisor-handshake\.ps1/);
 });
 
+test('tag workflow creates one draft before uploading the complete Windows asset set', () => {
+  const workflowSource = fs.readFileSync(path.join(__dirname, '../.github/workflows/windows-release.yml'), 'utf8');
+  const createIndex = workflowSource.indexOf('gh release create');
+  const uploadIndex = workflowSource.indexOf('gh release upload');
+
+  assert.doesNotMatch(workflowSource, /npm run release:win/);
+  assert.match(workflowSource, /npm run dist:win/);
+  assert.ok(createIndex >= 0, 'workflow must create the draft release explicitly');
+  assert.ok(uploadIndex > createIndex, 'workflow must create the draft before uploading assets');
+  assert.match(workflowSource, /--verify-tag/);
+  assert.match(workflowSource, /GM-Market-Bot-Setup-\$version\.exe/);
+  assert.match(workflowSource, /GM-Market-Bot-Setup-\$version\.exe\.blockmap/);
+  assert.match(workflowSource, /latest\.yml/);
+});
+
 test('NSIS package is one-click and has no installation-directory wizard', () => {
   const packageJson = require('../package.json');
   assert.equal(packageJson.build.nsis.oneClick, true);

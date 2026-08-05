@@ -24,13 +24,50 @@ jobs:
         shell: pwsh
         run: ./test/windows-supervisor-handshake.ps1
       - name: Build Windows package without publishing
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: npm run dist:win
-      - name: Build and publish draft Release
+      - name: Create deterministic draft Release
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        run: npm run release:win
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $tag = "v$version"
+          if ($env:GITHUB_REF_NAME -ne $tag) {
+            throw "Tag $($env:GITHUB_REF_NAME) does not match package version $version."
+          }
+
+          $assets = @(
+            "release/GM-Market-Bot-Setup-$version.exe",
+            "release/GM-Market-Bot-Setup-$version.exe.blockmap",
+            "release/latest.yml"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path $asset -PathType Leaf)) {
+              throw "Required Release asset is missing: $asset"
+            }
+          }
+
+          $existingRelease = gh release view $tag --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (-not (($existingRelease | ConvertFrom-Json).isDraft)) {
+              throw "Release $tag is already published; refusing to replace its assets."
+            }
+          } else {
+            gh release create $tag --draft --verify-tag --title $version --notes-from-tag
+            if ($LASTEXITCODE -ne 0) { throw "Could not create draft Release $tag." }
+          }
+
+          gh release upload $tag @assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the complete asset set for $tag." }
+
+          $uploadedNames = @((gh release view $tag --json assets | ConvertFrom-Json).assets.name)
+          foreach ($asset in $assets) {
+            $name = Split-Path $asset -Leaf
+            if ($name -notin $uploadedNames) {
+              throw "Draft Release $tag is missing uploaded asset $name."
+            }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: gm-market-bot-windows-${{ github.ref_name }}
