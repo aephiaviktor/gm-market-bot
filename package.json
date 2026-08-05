@@ -1,6 +1,6 @@
 {
   "name": "gm-market-bot",
-  "version": "0.3.40",
+  "version": "0.3.41",
   "description": "Desktop market automation for Star Atlas Galactic Marketplace",
   "main": "electron/main.js",
   "scripts": {

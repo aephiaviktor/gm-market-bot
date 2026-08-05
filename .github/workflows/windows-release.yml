@@ -37,9 +37,12 @@ jobs:
             throw "Tag $($env:GITHUB_REF_NAME) does not match package version $version."
           }
 
+          Move-Item "release/GM Market Bot Setup $version.exe" "release/GM-Market-Bot-Setup-$version.exe"
+          Move-Item "release/GM Market Bot Setup $version.exe.blockmap" "release/GM-Market-Bot-Setup-$version.exe.blockmap"
+
           $assets = @(
-            "release/GM Market Bot Setup $version.exe",
-            "release/GM Market Bot Setup $version.exe.blockmap",
+            "release/GM-Market-Bot-Setup-$version.exe",
+            "release/GM-Market-Bot-Setup-$version.exe.blockmap",
             "release/latest.yml"
           )
           foreach ($asset in $assets) {
