@@ -94,9 +94,9 @@ test('buy replacement carries cancellation suppression into post-placement recon
   assert.doesNotMatch(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, new Set<string>\(\), quoteMint\)/);
 });
 
-test('status open orders come from the chain even while the bot is running', () => {
+test('running status uses cycle-reconciled open orders instead of repeating chain scans', () => {
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
-  assert.doesNotMatch(source, /this\.running && isTracked[\s\S]{0,160}buildOpenOrdersSnapshotFromState/);
+  assert.match(source, /this\.running && isTracked[\s\S]{0,160}buildOpenOrdersSnapshotFromState/);
   assert.match(source, /getOpenOrdersForPlayerAndAsset\([\s\S]{0,180}resource\.mint/);
 });
 

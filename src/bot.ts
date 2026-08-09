@@ -2797,6 +2797,13 @@ export class GmMarketBot {
         try {
           let openOrders: BotOpenOrderStatus[] | null = null;
 
+          // The bot cycle already reconciles tracked orders against the chain
+          // and persists that state. Reuse it for the minute-by-minute status
+          // poll instead of issuing a full SDK order scan for every asset.
+          if (this.running && isTracked) {
+            openOrders = this.buildOpenOrdersSnapshotFromState(resource, now);
+          }
+
           if (!isTracked) {
             const cached = this.passiveOpenOrdersCache.get(mintKey);
             if (cached) {
