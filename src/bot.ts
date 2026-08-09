@@ -210,6 +210,13 @@ export function isRpcRateLimitError(error: unknown): boolean {
   return text.includes('429') || text.includes('too many requests') || text.includes('rate limit');
 }
 
+export function getRpcRetryDelays(useSharedProviderFailover: boolean): number[] {
+  // The shared limiter already selects a provider and the connection proxy
+  // immediately fails over to the other one. Retrying the same cooling-down
+  // provider first multiplies every logical read into as many as eight RPCs.
+  return useSharedProviderFailover ? [] : RPC_RATE_LIMIT_RETRY_DELAYS_MS;
+}
+
 export function getRpcLimiterBucketName(method: string): 'rpc:shared' | 'tx:shared' {
   return method === 'sendRawTransaction' ? 'tx:shared' : 'rpc:shared';
 }
@@ -319,6 +326,7 @@ function createFailoverConnection(
         // 429, report it back so the provider goes into cooldown. If the
         // shared limiter is disabled, default to 'main' (existing behavior).
         const sharedLimiter = limiter.getSharedLimiter();
+        const retryDelaysMs = getRpcRetryDelays(Boolean(sharedLimiter));
         let pickedProvider: 'main' | 'fallback' = 'main';
         if (sharedLimiter) {
           try {
@@ -346,6 +354,7 @@ function createFailoverConnection(
           logger,
           bucketName,
           method,
+          { retryDelaysMs },
         );
 
         const hasOther = otherTarget !== pickedTarget && typeof otherValueBound === 'function';
@@ -353,14 +362,27 @@ function createFailoverConnection(
           ? invokePicked()
           : callRpcWithFallback(
             invokePicked,
-            () => callRpcWithRateLimitRetry(
-              otherLabel,
-              () => otherValueBound.apply(otherTarget, args),
-              limiter,
-              logger,
-              bucketName,
-              method,
-            ),
+            async () => {
+              try {
+                return await callRpcWithRateLimitRetry(
+                  otherLabel,
+                  () => otherValueBound.apply(otherTarget, args),
+                  limiter,
+                  logger,
+                  bucketName,
+                  method,
+                  { retryDelaysMs },
+                );
+              } catch (error) {
+                const otherProvider = pickedProvider === 'main' ? 'fallback' : 'main';
+                if (sharedLimiter?.recordProviderOutcome && isRpcRateLimitError(error)) {
+                  await sharedLimiter.recordProviderOutcome(otherProvider, 'rate_limited').catch((reportError) => {
+                    logger.warn(`Failed to record provider outcome for ${otherProvider}.`, reportError);
+                  });
+                }
+                throw error;
+              }
+            },
             async (error) => {
               logger.warn(
                 `Provider ${pickedProvider} failed for ${label}, trying other provider.`,

@@ -6,6 +6,7 @@ const {
   callRpcWithFallback,
   callRpcWithRateLimitRetry,
   getRpcLimiterBucketName,
+  getRpcRetryDelays,
   isRpcLimiterLockContentionError,
   isRpcRateLimitError,
   RpcRequestRateLimiter,
@@ -30,6 +31,11 @@ test('RPC retry classification recognizes rate limits without swallowing unrelat
   assert.equal(isRpcRateLimitError({ code: -32005, message: 'rate limit exceeded' }), true);
   assert.equal(isRpcRateLimitError(new Error('blockhash not found')), false);
   assert.equal(isRpcRateLimitError(new Error('transaction simulation failed')), false);
+});
+
+test('shared provider failover does not amplify a rate limit with same-provider retries', () => {
+  assert.deepEqual(getRpcRetryDelays(true), []);
+  assert.deepEqual(getRpcRetryDelays(false), [2000, 5000, 10000]);
 });
 
 test('RPC failover runs only after primary failure and returns the fallback result', async () => {
