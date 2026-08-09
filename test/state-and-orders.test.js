@@ -93,3 +93,25 @@ test('buy replacement carries cancellation suppression into post-placement recon
   assert.match(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, cancelledIds, quoteMint\)/);
   assert.doesNotMatch(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, new Set<string>\(\), quoteMint\)/);
 });
+
+test('status open orders come from the chain even while the bot is running', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
+  assert.doesNotMatch(source, /this\.running && isTracked[\s\S]{0,160}buildOpenOrdersSnapshotFromState/);
+  assert.match(source, /getOpenOrdersForPlayerAndAsset\([\s\S]{0,180}resource\.mint/);
+});
+
+test('manual cancellation always invalidates the cached status snapshot', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
+  assert.match(source, /cancelActiveOrderForRule[\s\S]{0,4500}finally \{[\s\S]{0,300}invalidateStatusSnapshotCache\(\)/);
+});
+
+test('recent activity supports a filled-orders-only filter', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const html = fs.readFileSync(path.join(__dirname, '../electron/renderer.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '../electron/renderer.js'), 'utf8');
+  assert.match(html, /id="recent-activity-filled-only"/);
+  assert.match(html, />Only filled orders</);
+  assert.match(renderer, /entry\?\.event === 'FILLED'/);
+  assert.match(renderer, /filledOnly \? 'No filled orders' : 'No recent activity'/);
+});

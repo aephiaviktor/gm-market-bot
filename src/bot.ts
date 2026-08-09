@@ -1832,6 +1832,10 @@ export class GmMarketBot {
         message,
       });
       return { ok: false, status: 'error', asset, side: normalizedSide, message };
+    } finally {
+      // The renderer refreshes immediately after cancellation. Do not reuse a
+      // snapshot containing the cancelled order or an already-absent order.
+      this.invalidateStatusSnapshotCache();
     }
   }
 
@@ -2792,10 +2796,6 @@ export class GmMarketBot {
 
         try {
           let openOrders: BotOpenOrderStatus[] | null = null;
-
-          if (this.running && isTracked) {
-            openOrders = this.buildOpenOrdersSnapshotFromState(resource, now);
-          }
 
           if (!isTracked) {
             const cached = this.passiveOpenOrdersCache.get(mintKey);
