@@ -94,7 +94,8 @@ test('RPC limiter send serializes the role explicitly and does not hydrate its b
   const renderer = fs.readFileSync(path.join(__dirname, '..', 'electron', 'renderer.js'), 'utf8');
 
   assert.match(renderer, /providerRole\s*=.*checked[\s\S]*?\? 'fallback'[\s\S]*?: 'main'/);
-  assert.match(renderer, /sendSettingsToRpcLimiter\(\{ config: readFormConfig\(\), providerRole \}\)/);
+  assert.match(renderer, /sendSettingsToRpcLimiter\(\{[\s\S]*?rpcUrl:\s*config\.RPC_URL,[\s\S]*?rpcRequestsPerSecond:\s*config\.RPC_REQUESTS_PER_SECOND,[\s\S]*?txRequestsPerSecond:\s*config\.RPC_TX_SEND_RATE_LIMIT_PER_SECOND,[\s\S]*?providerRole,[\s\S]*?\}\)/);
+  assert.doesNotMatch(renderer, /sendSettingsToRpcLimiter\(\{ config:/);
   assert.doesNotMatch(main, /sendSettingsToRpcLimiter\(await resolveSubmittedConfig/);
   assert.match(main, /sendSettingsToRpcLimiter\(validated\)/);
 });
