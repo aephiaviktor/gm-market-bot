@@ -3,13 +3,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-test('Windows updater pins NSIS to the running install directory and delegates restart to the supervisor', () => {
+test('Windows updater restarts after direct or supervised launches without duplicate instances', () => {
   const mainSource = fs.readFileSync(path.join(__dirname, '../electron/main.js'), 'utf8');
   assert.match(mainSource, /const installDirectory = getPackagedInstallDirectory\(process\.execPath\)/);
   assert.match(mainSource, /autoUpdater\.installDirectory = installDirectory/);
   assert.match(mainSource, /writeUpdateRestartRequest\(/);
-  assert.match(mainSource, /autoUpdater\.quitAndInstall\(true, false\)/);
-  assert.doesNotMatch(mainSource, /autoUpdater\.quitAndInstall\(true, true\)/);
+  assert.match(mainSource, /autoUpdater\.quitAndInstall\(true, true\)/);
+  assert.match(mainSource, /app\.requestSingleInstanceLock\(\)/);
+  assert.match(mainSource, /app\.on\('second-instance'/);
 });
 
 test('canonical supervisor consumes the update marker and waits for the target executable version', () => {

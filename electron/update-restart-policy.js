@@ -35,9 +35,34 @@ function writeUpdateRestartRequest({ runtimeDir, targetVersion, installDirectory
   return requestPath;
 }
 
+function consumeSatisfiedUpdateRestartRequest({ runtimeDir, currentVersion, installDirectory }) {
+  const requestPath = getUpdateRestartRequestPath(runtimeDir);
+  if (!fs.existsSync(requestPath)) return false;
+
+  let request;
+  try {
+    request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+  } catch {
+    return false;
+  }
+
+  const targetVersion = String(request?.targetVersion || '').trim();
+  const targetDirectory = String(request?.installDirectory || '').trim();
+  const normalizedCurrentDirectory = path.resolve(String(installDirectory || '').trim());
+  const normalizedTargetDirectory = path.resolve(targetDirectory);
+  const directoriesMatch = process.platform === 'win32'
+    ? normalizedCurrentDirectory.toLowerCase() === normalizedTargetDirectory.toLowerCase()
+    : normalizedCurrentDirectory === normalizedTargetDirectory;
+
+  if (targetVersion !== String(currentVersion || '').trim() || !directoriesMatch) return false;
+  fs.unlinkSync(requestPath);
+  return true;
+}
+
 module.exports = {
   UPDATE_RESTART_REQUEST_FILE,
   buildUpdateRestartRequest,
+  consumeSatisfiedUpdateRestartRequest,
   getPackagedInstallDirectory,
   getUpdateRestartRequestPath,
   writeUpdateRestartRequest,

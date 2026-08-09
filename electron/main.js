@@ -7,7 +7,11 @@ const packageJson = require('../package.json');
 const stableIcon = require('./lib/stable-icon');
 const { autoUpdater } = require('electron-updater');
 const { determineReleaseAction } = require('./release-update-policy');
-const { getPackagedInstallDirectory, writeUpdateRestartRequest } = require('./update-restart-policy');
+const {
+  consumeSatisfiedUpdateRestartRequest,
+  getPackagedInstallDirectory,
+  writeUpdateRestartRequest,
+} = require('./update-restart-policy');
 const {
   REDACTED_VALUE,
   SENSITIVE_CONFIG_KEYS,
@@ -45,6 +49,21 @@ let mainWindow = null;
 let bot = null;
 let botRunning = false;
 const recentLogs = [];
+
+// Updates must recover whether the app was launched directly or through the
+// supervisor. The installer force-launches the updated app; if the supervisor
+// also starts it, this lock keeps exactly one main instance alive.
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
 
 const AEPHIA_TOKEN_VALIDATE_URL = 'https://api.aephia.com/token/validate';
 const AEPHIA_API_KEY_VALIDATION_BYPASS = false; // Re-enable Aephia token validation.
@@ -290,7 +309,7 @@ async function downloadUpdateAndRestart() {
       installDirectory,
     });
     emitUpdateProgress('restarting', `Official GM Market Bot v${update.latestVersion} downloaded. Restarting...`);
-    setTimeout(() => autoUpdater.quitAndInstall(true, false), 500);
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 500);
     return {
       updated: true,
       currentVersion: update.currentVersion,
@@ -962,6 +981,14 @@ registerTrustedIpcHandler('updates:download-and-restart', async () => {
 });
 
 app.whenReady().then(async () => {
+  if (app.isPackaged) {
+    consumeSatisfiedUpdateRestartRequest({
+      runtimeDir: getRuntimeDataDir(),
+      currentVersion: APP_VERSION,
+      installDirectory: getPackagedInstallDirectory(process.execPath),
+    });
+  }
+
   const runtimeMigration = await migrateLegacyRuntimeData({
     legacyDir: path.join(getAppRoot(), 'analysis'),
     targetDir: getRuntimeDataDir(),
