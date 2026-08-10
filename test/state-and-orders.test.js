@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   classifyOrderFillEvents,
   normalizeLoadedState,
+  reconcileUnconfiguredOrderSide,
   removeTrackedOrder,
 } = require('../dist/bot');
 
@@ -64,6 +65,32 @@ test('fill classification reports partial and full fills while suppressing cance
 test('an unchanged open order does not produce a fill event', () => {
   const previous = { 'order-1': { price: 1.25, remaining: 10, quantity: 10 } };
   assert.deepEqual(classifyOrderFillEvents(previous, [order('order-1', 10, 1.25, 10)], new Set()), []);
+});
+
+test('unconfigured order side is reconciled from the chain snapshot without retaining stale orders', () => {
+  const state = {
+    [MINT]: {
+      buy: {
+        openOrders: {
+          stale: { price: 0.09, remaining: 500_000, quantity: 500_000 },
+        },
+      },
+      sell: { openOrders: {} },
+    },
+  };
+
+  reconcileUnconfiguredOrderSide(state, MINT, 'buy', []);
+  assert.deepEqual(state[MINT].buy.openOrders, {});
+
+  reconcileUnconfiguredOrderSide(state, MINT, 'buy', [order('real-order', 25, 0.08, 30)], '2026-08-10T12:00:00.000Z');
+  assert.deepEqual(state[MINT].buy.openOrders, {
+    'real-order': {
+      price: 0.08,
+      remaining: 25,
+      quantity: 30,
+      updatedAt: '2026-08-10T12:00:00.000Z',
+    },
+  });
 });
 
 test('confirmed cancellation removes the tracked order from durable state', () => {

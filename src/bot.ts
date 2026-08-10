@@ -1450,6 +1450,33 @@ export function classifyOrderFillEvents(
   return events;
 }
 
+export function reconcileUnconfiguredOrderSide(
+  state: BotState,
+  mintKey: string,
+  side: AssetRuleSide,
+  currentOrders: Order[],
+  updatedAt = new Date().toISOString(),
+): void {
+  const resourceState = ensureResourceState(state, mintKey);
+  const previousSideState = getSideState(resourceState, side);
+  const nextSideState: ResourceSideOrderState = {
+    openOrders: {},
+    lastWalletBalance: previousSideState.lastWalletBalance,
+  };
+
+  for (const order of currentOrders) {
+    nextSideState.openOrders[order.id] = {
+      price: order.uiPrice,
+      remaining: getOrderRemainingQuantity(order),
+      quantity: getOrderTrackedQuantity(order),
+      updatedAt,
+    };
+  }
+
+  resourceState[side] = nextSideState;
+  state[mintKey] = resourceState;
+}
+
 export function removeTrackedOrder(
   state: BotState,
   mintKey: string,
@@ -2721,6 +2748,30 @@ export class GmMarketBot {
     const hasRunnableBuyRule = buyRules.length > 0;
     const marketOrderSnapshot =
       hasRunnableSellRule || hasRunnableBuyRule ? await this.readMarketOrderSnapshot(resource) : undefined;
+
+    if (marketOrderSnapshot) {
+      const mintKey = resource.mint.toBase58();
+      if (sellRules.length === 0) {
+        reconcileUnconfiguredOrderSide(
+          this.state,
+          mintKey,
+          'sell',
+          marketOrderSnapshot.myOrdersRaw.filter(
+            (order) => order.orderType === OrderSide.Sell && isOrderForQuoteMint(order, quoteMint),
+          ),
+        );
+      }
+      if (buyRules.length === 0) {
+        reconcileUnconfiguredOrderSide(
+          this.state,
+          mintKey,
+          'buy',
+          marketOrderSnapshot.myOrdersRaw.filter(
+            (order) => order.orderType === OrderSide.Buy && isOrderForQuoteMint(order, quoteMint),
+          ),
+        );
+      }
+    }
 
     if (sellRules.length > 1) {
       const ruleIndexes = sellRules.map((item) => item.index);
