@@ -330,8 +330,11 @@ function createFailoverConnection(
         let pickedProvider: 'main' | 'fallback' = 'main';
         if (sharedLimiter) {
           try {
-            const pick = await limiter.waitForProvider(label, bucketName, method);
-            if (pick) pickedProvider = pick.provider;
+            await limiter.waitForProvider(label, bucketName, method);
+            // GM's configured primary is intentionally the currently healthy
+            // shared fallback URL. Limiter admission must not redirect this
+            // request back to the exhausted endpoint.
+            pickedProvider = 'main';
           } catch (waitError) {
             logger.error(`Shared limiter wait failed for ${label}.`, waitError);
             throw waitError;
@@ -1513,6 +1516,10 @@ export type CycleTask = {
 export type CycleTaskOutcome =
   | { asset: string; ok: true }
   | { asset: string; ok: false; error: string };
+
+export function calculateNextCycleDelayMs(checkIntervalMs: number, _cycleDurationMs: number): number {
+  return Math.max(0, checkIntervalMs);
+}
 
 export async function runCycleTasksSafely(
   tasks: CycleTask[],
@@ -3213,7 +3220,7 @@ export class GmMarketBot {
     }
 
     const elapsed = end - start;
-    const delay = Math.max(0, this.checkIntervalMs - elapsed);
+    const delay = calculateNextCycleDelayMs(this.checkIntervalMs, elapsed);
     this.loopTimer = setTimeout(() => {
       void this.loop();
     }, delay);

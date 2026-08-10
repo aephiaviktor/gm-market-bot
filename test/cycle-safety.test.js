@@ -2,7 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runCycleTasksSafely } = require('../dist/bot');
+const { calculateNextCycleDelayMs, runCycleTasksSafely } = require('../dist/bot');
+
+test('slow cycles still wait a full monitoring interval before the next cycle', () => {
+  const thirtyMinutes = 30 * 60 * 1000;
+  assert.equal(calculateNextCycleDelayMs(thirtyMinutes, 5 * 60 * 1000), thirtyMinutes);
+  assert.equal(calculateNextCycleDelayMs(thirtyMinutes, 45 * 60 * 1000), thirtyMinutes);
+});
 
 test('a failed asset is recorded and does not stop the next asset', async () => {
   const executed = [];

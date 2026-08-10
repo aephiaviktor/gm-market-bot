@@ -46,8 +46,10 @@ function resolveLimiterConnectionUrls(providers) {
     throw new Error('Use RPC Limiter is enabled, but no RPC Limiter URLs are configured. Send settings to RPC Limiter first.');
   }
   return {
-    rpcUrl: mainUrl || fallbackUrl,
-    rpcUrlFallback: mainUrl && fallbackUrl ? fallbackUrl : '',
+    // GM-specific incident policy: prefer the configured fallback project,
+    // which is currently healthy, and keep main as the single bounded alternate.
+    rpcUrl: fallbackUrl || mainUrl,
+    rpcUrlFallback: mainUrl && fallbackUrl ? mainUrl : '',
   };
 }
 

@@ -124,6 +124,6 @@ test('limiter transport supports Main-only, Fallback-only, both, and fails close
   }), { rpcUrl: 'https://fallback.invalid', rpcUrlFallback: '' });
   assert.deepEqual(resolveLimiterConnectionUrls({
     main: { url: 'https://main.invalid' }, fallback: { url: 'https://fallback.invalid' },
-  }), { rpcUrl: 'https://main.invalid', rpcUrlFallback: 'https://fallback.invalid' });
+  }), { rpcUrl: 'https://fallback.invalid', rpcUrlFallback: 'https://main.invalid' });
   assert.throws(() => resolveLimiterConnectionUrls({ main: {}, fallback: {} }), /no RPC Limiter URLs are configured/);
 });
