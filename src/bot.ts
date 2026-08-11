@@ -205,6 +205,43 @@ function getErrorText(error: unknown): string {
   }
 }
 
+type SignatureStatusLookup = Pick<Connection, 'getSignatureStatuses'>;
+
+function isBlockHeightExpiryError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /expired:\s*block height exceeded/i.test(message);
+}
+
+export async function recoverExpiredTransactionSignature(
+  connection: SignatureStatusLookup,
+  signature: string,
+  confirmationError: unknown,
+): Promise<string> {
+  if (!isBlockHeightExpiryError(confirmationError)) {
+    throw confirmationError;
+  }
+
+  let statusResponse: Awaited<ReturnType<Connection['getSignatureStatuses']>>;
+  try {
+    statusResponse = await connection.getSignatureStatuses(
+      [signature],
+      { searchTransactionHistory: true },
+    );
+  } catch {
+    throw confirmationError;
+  }
+
+  const status = statusResponse.value[0];
+  if (status?.err) {
+    throw new Error(`Transaction ${signature} failed: ${JSON.stringify(status.err)}`);
+  }
+  if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+    return signature;
+  }
+
+  throw confirmationError;
+}
+
 export function isRpcRateLimitError(error: unknown): boolean {
   const text = getErrorText(error).toLowerCase();
   return text.includes('429') || text.includes('too many requests') || text.includes('rate limit');
@@ -2044,8 +2081,12 @@ export class GmMarketBot {
 
   private async signAndSend(transaction: Transaction, extraSigners: Keypair[] = []): Promise<string> {
     const { signature, blockhash, lastValidBlockHeight } = await this.submitTransactionRateLimited(transaction, extraSigners);
-    await this.connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
-    return signature;
+    try {
+      await this.connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      return signature;
+    } catch (error) {
+      return await recoverExpiredTransactionSignature(this.connection, signature, error);
+    }
   }
 
   private async cancelOrder(order: Order, resource: ResourceConfig, side: AssetRuleSide, cancelledIds: Set<string>): Promise<string> {

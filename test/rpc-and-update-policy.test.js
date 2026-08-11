@@ -9,6 +9,7 @@ const {
   getRpcRetryDelays,
   isRpcLimiterLockContentionError,
   isRpcRateLimitError,
+  recoverExpiredTransactionSignature,
   RpcRequestRateLimiter,
 } = require('../dist/bot');
 function createLimiterSpy() {
@@ -31,6 +32,63 @@ test('RPC retry classification recognizes rate limits without swallowing unrelat
   assert.equal(isRpcRateLimitError({ code: -32005, message: 'rate limit exceeded' }), true);
   assert.equal(isRpcRateLimitError(new Error('blockhash not found')), false);
   assert.equal(isRpcRateLimitError(new Error('transaction simulation failed')), false);
+});
+
+test('expired transaction confirmation performs one history lookup and accepts confirmed signatures', async () => {
+  const calls = [];
+  const signature = await recoverExpiredTransactionSignature(
+    {
+      async getSignatureStatuses(signatures, options) {
+        calls.push([signatures, options]);
+        return { value: [{ confirmationStatus: 'confirmed', err: null }] };
+      },
+    },
+    'test-signature',
+    new Error('Signature test-signature has expired: block height exceeded.'),
+  );
+
+  assert.equal(signature, 'test-signature');
+  assert.deepEqual(calls, [[['test-signature'], { searchTransactionHistory: true }]]);
+});
+
+test('expired transaction confirmation preserves the original failure when the signature is unknown', async () => {
+  let calls = 0;
+  const originalError = new Error('Signature test-signature has expired: block height exceeded.');
+
+  await assert.rejects(
+    () => recoverExpiredTransactionSignature(
+      {
+        async getSignatureStatuses() {
+          calls += 1;
+          return { value: [null] };
+        },
+      },
+      'test-signature',
+      originalError,
+    ),
+    (error) => error === originalError,
+  );
+  assert.equal(calls, 1);
+});
+
+test('non-expiry confirmation failures do not trigger a signature lookup', async () => {
+  let calls = 0;
+  const originalError = new Error('transaction simulation failed');
+
+  await assert.rejects(
+    () => recoverExpiredTransactionSignature(
+      {
+        async getSignatureStatuses() {
+          calls += 1;
+          return { value: [null] };
+        },
+      },
+      'test-signature',
+      originalError,
+    ),
+    (error) => error === originalError,
+  );
+  assert.equal(calls, 0);
 });
 
 test('shared provider failover does not amplify a rate limit with same-provider retries', () => {
