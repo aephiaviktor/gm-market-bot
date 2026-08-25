@@ -560,6 +560,7 @@ type DesiredBuyOrder = {
   targetQuantity: number;
   maxBuyPrice: number;
   quoteSymbol: 'ATLAS' | 'USDC';
+  immediateSellOrder: Order | null;
 };
 
 type OrderSnapshot = {
@@ -1629,12 +1630,12 @@ export function calculateTargetSellPrice(
     : clampPrice(options?.maxPrice ?? minPrice, minPrice, options?.maxPrice ?? minPrice);
 }
 
-export function calculateImmediateBuyPrice(
+export function findImmediateBuyOrder(
   allSellOrders: Order[],
   walletOwner: string,
   competitiveBuyPrice: number,
   maxBuyPrice: number,
-): number | null {
+): Order | null {
   const bestExecutableSell = allSellOrders
     .filter(
       (order) =>
@@ -1645,7 +1646,7 @@ export function calculateImmediateBuyPrice(
     )
     .sort((a, b) => a.uiPrice - b.uiPrice)[0];
 
-  return bestExecutableSell?.uiPrice ?? null;
+  return bestExecutableSell ?? null;
 }
 
 export function calculateTargetBuyPrice(
@@ -2194,6 +2195,42 @@ export class GmMarketBot {
     await this.detectFills(resource, side, refreshedOrders, cancelledIds);
   }
 
+  private async fillSellOrder(
+    resource: ResourceConfig,
+    sellOrder: Order,
+    quantity: number,
+    quoteMint: PublicKey,
+  ): Promise<string> {
+    const quoteSymbol = getQuoteSymbolForMint(quoteMint);
+    this.logger.info(
+      `Filling sell order ${sellOrder.id} for ${quantity} ${resource.name} @ ${sellOrder.uiPrice} ${quoteSymbol}`,
+    );
+    const { transaction, signers } = await this.gm.getCreateExchangeTransaction(
+      this.connection,
+      sellOrder,
+      this.wallet.publicKey,
+      quantity,
+      GM_PROGRAM_ID,
+    );
+    const sig = await this.signAndSend(transaction, signers);
+    this.invalidateMarketLeaderCacheForMint(resource.mint.toBase58());
+    this.walletBalanceCache.delete(resource.mint.toBase58());
+    this.walletBalanceCache.delete(quoteMint.toBase58());
+    await this.appendLog({
+      event: 'FILLED',
+      side: 'buy',
+      resource: resource.name,
+      mint: resource.mint.toBase58(),
+      orderId: sellOrder.id,
+      tx: sig,
+      price: sellOrder.uiPrice,
+      quantity,
+      currency: quoteSymbol,
+      message: `Filled external sell order (${quantity} @ ${sellOrder.uiPrice}).`,
+    });
+    return sig;
+  }
+
   private async detectFills(
     resource: ResourceConfig,
     side: AssetRuleSide,
@@ -2482,17 +2519,17 @@ export class GmMarketBot {
             { ...(outbidOptions ?? {}), minPrice: rule.minPrice },
           )
         : maxBuyPrice;
-    const immediateBuyPrice = calculateImmediateBuyPrice(
+    const immediateSellOrder = findImmediateBuyOrder(
       allSellOrders,
       this.wallet.publicKey.toBase58(),
       competitiveBuyPrice,
       maxBuyPrice,
     );
-    const targetPrice = immediateBuyPrice ?? competitiveBuyPrice;
+    const targetPrice = immediateSellOrder?.uiPrice ?? competitiveBuyPrice;
 
-    if (immediateBuyPrice !== null) {
+    if (immediateSellOrder) {
       this.logger.info(
-        `${resource.name} has an external sell at ${immediateBuyPrice} ${quoteSymbol}, no higher than the next competitive bid ${competitiveBuyPrice}. Taking the sell instead of raising the bid.`,
+        `${resource.name} has an external sell at ${immediateSellOrder.uiPrice} ${quoteSymbol}, no higher than the next competitive bid ${competitiveBuyPrice}. Taking the sell instead of raising the bid.`,
       );
     }
 
@@ -2508,6 +2545,26 @@ export class GmMarketBot {
     this.logger.info(
       `Planning to buy up to ${targetQuantity} ${resource.name} at max ${maxBuyPrice} ${quoteSymbol} (target ${targetPrice}).`,
     );
+
+    if (immediateSellOrder && targetQuantity > 0) {
+      const fillQuantity = Math.min(targetQuantity, getOrderBookQuantity(immediateSellOrder));
+      const releasableQuote = myOrders.reduce(
+        (total, order) => total + order.uiPrice * getOrderRemainingQuantity(order),
+        0,
+      );
+      const requiredQuote = fillQuantity * immediateSellOrder.uiPrice;
+      if (quoteBalance + releasableQuote < requiredQuote) {
+        this.logger.info(
+          `Insufficient ${quoteSymbol} to fill sell order ${immediateSellOrder.id} for ${fillQuantity} ${resource.name} @ ${immediateSellOrder.uiPrice}. Skipping.`,
+        );
+        return;
+      }
+      for (const order of myOrders) {
+        await this.cancelOrder(order, resource, 'buy', cancelledIds);
+      }
+      await this.fillSellOrder(resource, immediateSellOrder, fillQuantity, quoteMint);
+      return;
+    }
 
     if (!activeOrder) {
       if (targetQuantity <= 0) {
@@ -2646,17 +2703,17 @@ export class GmMarketBot {
               { ...(outbidOptions ?? (isShipMarket ? { outbidPct: SHIP_BUY_OUTBID_PCT } : {})), minPrice: rule.minPrice },
             )
           : maxBuyPrice;
-      const immediateBuyPrice = calculateImmediateBuyPrice(
+      const immediateSellOrder = findImmediateBuyOrder(
         allSellOrders,
         this.wallet.publicKey.toBase58(),
         competitiveBuyPrice,
         maxBuyPrice,
       );
-      const targetPrice = immediateBuyPrice ?? competitiveBuyPrice;
+      const targetPrice = immediateSellOrder?.uiPrice ?? competitiveBuyPrice;
 
-      if (immediateBuyPrice !== null) {
+      if (immediateSellOrder) {
         this.logger.info(
-          `${resource.name} rule ${index} has an external sell at ${immediateBuyPrice} ${quoteSymbol}, no higher than the next competitive bid ${competitiveBuyPrice}. Taking the sell instead of raising the bid.`,
+          `${resource.name} rule ${index} has an external sell at ${immediateSellOrder.uiPrice} ${quoteSymbol}, no higher than the next competitive bid ${competitiveBuyPrice}. Taking the sell instead of raising the bid.`,
         );
       }
 
@@ -2667,6 +2724,7 @@ export class GmMarketBot {
         targetQuantity,
         maxBuyPrice,
         quoteSymbol,
+        immediateSellOrder,
       });
     }
 
@@ -2721,6 +2779,37 @@ export class GmMarketBot {
     this.logger.info(`${quoteSymbol} balance: ${quoteBalance}`);
     this.logger.info(`${resource.name} inventory balance: ${inventoryBalance}`);
     this.logger.info(`Planning ${desiredOrders.length} buy order(s) for ${resource.name}.`);
+
+    const immediateDesired = desiredOrders.find(
+      (desired) => desired.targetQuantity > 0 && desired.immediateSellOrder,
+    );
+    if (immediateDesired?.immediateSellOrder) {
+      const fillQuantity = Math.min(
+        immediateDesired.targetQuantity,
+        getOrderBookQuantity(immediateDesired.immediateSellOrder),
+      );
+      const releasableQuote = activeOrders.reduce(
+        (total, order) => total + order.uiPrice * getOrderRemainingQuantity(order),
+        0,
+      );
+      const requiredQuote = fillQuantity * immediateDesired.immediateSellOrder.uiPrice;
+      if (quoteBalance + releasableQuote < requiredQuote) {
+        this.logger.info(
+          `Insufficient ${quoteSymbol} to fill sell order ${immediateDesired.immediateSellOrder.id} for ${fillQuantity} ${resource.name} @ ${immediateDesired.immediateSellOrder.uiPrice}. Skipping.`,
+        );
+        return;
+      }
+      for (const order of activeOrders) {
+        await this.cancelOrder(order, resource, 'buy', cancelledIds);
+      }
+      await this.fillSellOrder(
+        resource,
+        immediateDesired.immediateSellOrder,
+        fillQuantity,
+        quoteMint,
+      );
+      return;
+    }
 
     for (const order of activeOrders) {
       if (matchedOrderIds.has(order.id)) {

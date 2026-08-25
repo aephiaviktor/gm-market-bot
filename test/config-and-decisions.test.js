@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   buildBotConfig,
-  calculateImmediateBuyPrice,
+  findImmediateBuyOrder,
   calculateTargetBuyPrice,
   calculateTargetSellPrice,
   parseAssetRules,
@@ -80,18 +80,17 @@ test('sell pricing ignores own and undersized orders and respects configured bou
   assert.equal(calculateTargetSellPrice([], ownWallet, 1.1, 10, { maxPrice: 1.5 }), 1.5);
 });
 
-test('immediate buy pricing takes a cheaper external sell instead of raising the bid', () => {
+test('immediate buy selection returns the cheapest executable external sell order', () => {
   const ownWallet = 'own-wallet';
-  const sellOrders = [
-    order({ owner: ownWallet, price: 0.65, quantity: 100 }),
-    order({ price: 0.72, quantity: 0 }),
-    order({ price: 0.74, quantity: 25 }),
-    order({ price: 0.76, quantity: 100 }),
-  ];
+  const ownSell = order({ owner: ownWallet, price: 0.65, quantity: 100 });
+  const emptySell = order({ price: 0.72, quantity: 0 });
+  const cheapestExecutableSell = { ...order({ price: 0.74, quantity: 25 }), id: 'sell-order-1' };
+  const expensiveSell = order({ price: 0.76, quantity: 100 });
+  const sellOrders = [ownSell, emptySell, cheapestExecutableSell, expensiveSell];
 
-  assert.equal(calculateImmediateBuyPrice(sellOrders, ownWallet, 0.75, 0.8), 0.74);
-  assert.equal(calculateImmediateBuyPrice(sellOrders, ownWallet, 0.73, 0.8), null);
-  assert.equal(calculateImmediateBuyPrice(sellOrders, ownWallet, 0.75, 0.73), null);
+  assert.equal(findImmediateBuyOrder(sellOrders, ownWallet, 0.75, 0.8), cheapestExecutableSell);
+  assert.equal(findImmediateBuyOrder(sellOrders, ownWallet, 0.73, 0.8), null);
+  assert.equal(findImmediateBuyOrder(sellOrders, ownWallet, 0.75, 0.73), null);
 });
 
 test('buy pricing ignores own and undersized orders and never exceeds the configured maximum', () => {
