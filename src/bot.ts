@@ -1629,6 +1629,25 @@ export function calculateTargetSellPrice(
     : clampPrice(options?.maxPrice ?? minPrice, minPrice, options?.maxPrice ?? minPrice);
 }
 
+export function calculateImmediateBuyPrice(
+  allSellOrders: Order[],
+  walletOwner: string,
+  competitiveBuyPrice: number,
+  maxBuyPrice: number,
+): number | null {
+  const bestExecutableSell = allSellOrders
+    .filter(
+      (order) =>
+        order.owner !== walletOwner &&
+        getOrderBookQuantity(order) > 0 &&
+        order.uiPrice <= competitiveBuyPrice + ORDER_PRICE_EPSILON &&
+        order.uiPrice <= maxBuyPrice + ORDER_PRICE_EPSILON,
+    )
+    .sort((a, b) => a.uiPrice - b.uiPrice)[0];
+
+  return bestExecutableSell?.uiPrice ?? null;
+}
+
 export function calculateTargetBuyPrice(
   allBuyOrders: Order[],
   walletOwner: string,
@@ -2428,6 +2447,7 @@ export class GmMarketBot {
     const quoteMint = quoteMintOverride ?? getQuoteMintForResource(resource);
     const quoteSymbol = getQuoteSymbolForMint(quoteMint);
     const allOrders = allOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && isOrderForQuoteMint(o, quoteMint));
+    const allSellOrders = allOrdersRaw.filter((o) => o.orderType === OrderSide.Sell && isOrderForQuoteMint(o, quoteMint));
     const myOrders = myOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && isOrderForQuoteMint(o, quoteMint));
     const staleQuoteOrders = myOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && !isOrderForQuoteMint(o, quoteMint));
 
@@ -2453,7 +2473,7 @@ export class GmMarketBot {
     const remainingBuyAllowance = Math.max(0, Math.floor((rule.limit ?? Number.POSITIVE_INFINITY) - inventoryBalance));
     const targetQuantity = Math.min(maxBuyQuantity, remainingBuyAllowance);
     const relevantBuyQuantity = getRelevantOrderThreshold(Math.max(1, targetQuantity), this.config.relevantBuyOrderPct);
-    const targetPrice =
+    const competitiveBuyPrice =
       targetQuantity > 0
         ? this.getTargetBuyPrice(
             allOrders,
@@ -2462,6 +2482,19 @@ export class GmMarketBot {
             { ...(outbidOptions ?? {}), minPrice: rule.minPrice },
           )
         : maxBuyPrice;
+    const immediateBuyPrice = calculateImmediateBuyPrice(
+      allSellOrders,
+      this.wallet.publicKey.toBase58(),
+      competitiveBuyPrice,
+      maxBuyPrice,
+    );
+    const targetPrice = immediateBuyPrice ?? competitiveBuyPrice;
+
+    if (immediateBuyPrice !== null) {
+      this.logger.info(
+        `${resource.name} has an external sell at ${immediateBuyPrice} ${quoteSymbol}, no higher than the next competitive bid ${competitiveBuyPrice}. Taking the sell instead of raising the bid.`,
+      );
+    }
 
     const sortedMyOrders = [...myOrders].sort((a, b) => b.uiPrice - a.uiPrice);
     const activeOrder = sortedMyOrders[0];
@@ -2583,6 +2616,7 @@ export class GmMarketBot {
     const quoteSymbol = getQuoteSymbolForMint(quoteMint);
     const isShipMarket = quoteMint.equals(QUOTE_USDC_MINT);
     const allOrders = allOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && isOrderForQuoteMint(o, quoteMint));
+    const allSellOrders = allOrdersRaw.filter((o) => o.orderType === OrderSide.Sell && isOrderForQuoteMint(o, quoteMint));
     const myOrders = myOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && isOrderForQuoteMint(o, quoteMint));
     const staleQuoteOrders = myOrdersRaw.filter((o) => o.orderType === OrderSide.Buy && !isOrderForQuoteMint(o, quoteMint));
 
@@ -2603,7 +2637,7 @@ export class GmMarketBot {
       const possibleTargetQuantity = Math.min(maxBuyQuantity, remainingBuyAllowance);
       const targetQuantity = rule.enabled && possibleTargetQuantity >= minBuyQuantity ? possibleTargetQuantity : 0;
       const relevantBuyQuantity = getRelevantOrderThreshold(Math.max(1, targetQuantity), this.config.relevantBuyOrderPct);
-      const targetPrice =
+      const competitiveBuyPrice =
         targetQuantity > 0
           ? this.getTargetBuyPrice(
               allOrders,
@@ -2612,6 +2646,19 @@ export class GmMarketBot {
               { ...(outbidOptions ?? (isShipMarket ? { outbidPct: SHIP_BUY_OUTBID_PCT } : {})), minPrice: rule.minPrice },
             )
           : maxBuyPrice;
+      const immediateBuyPrice = calculateImmediateBuyPrice(
+        allSellOrders,
+        this.wallet.publicKey.toBase58(),
+        competitiveBuyPrice,
+        maxBuyPrice,
+      );
+      const targetPrice = immediateBuyPrice ?? competitiveBuyPrice;
+
+      if (immediateBuyPrice !== null) {
+        this.logger.info(
+          `${resource.name} rule ${index} has an external sell at ${immediateBuyPrice} ${quoteSymbol}, no higher than the next competitive bid ${competitiveBuyPrice}. Taking the sell instead of raising the bid.`,
+        );
+      }
 
       desiredOrders.push({
         rule,

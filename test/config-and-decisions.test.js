@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   buildBotConfig,
+  calculateImmediateBuyPrice,
   calculateTargetBuyPrice,
   calculateTargetSellPrice,
   parseAssetRules,
@@ -77,6 +78,20 @@ test('sell pricing ignores own and undersized orders and respects configured bou
 
   assert.equal(target, 1.29999999);
   assert.equal(calculateTargetSellPrice([], ownWallet, 1.1, 10, { maxPrice: 1.5 }), 1.5);
+});
+
+test('immediate buy pricing takes a cheaper external sell instead of raising the bid', () => {
+  const ownWallet = 'own-wallet';
+  const sellOrders = [
+    order({ owner: ownWallet, price: 0.65, quantity: 100 }),
+    order({ price: 0.72, quantity: 0 }),
+    order({ price: 0.74, quantity: 25 }),
+    order({ price: 0.76, quantity: 100 }),
+  ];
+
+  assert.equal(calculateImmediateBuyPrice(sellOrders, ownWallet, 0.75, 0.8), 0.74);
+  assert.equal(calculateImmediateBuyPrice(sellOrders, ownWallet, 0.73, 0.8), null);
+  assert.equal(calculateImmediateBuyPrice(sellOrders, ownWallet, 0.75, 0.73), null);
 });
 
 test('buy pricing ignores own and undersized orders and never exceeds the configured maximum', () => {
