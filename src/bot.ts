@@ -2248,7 +2248,7 @@ export class GmMarketBot {
       const { orderId, meta } = fill;
       if (fill.kind === 'partial') {
         await this.appendLog({
-          event: 'FILLED',
+          event: 'PARTIAL_FILL',
           side,
           resource: resource.name,
           mint: resource.mint.toBase58(),

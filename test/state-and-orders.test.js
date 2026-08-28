@@ -132,13 +132,16 @@ test('manual cancellation always invalidates the cached status snapshot', () => 
   assert.match(source, /cancelActiveOrderForRule[\s\S]{0,4500}finally \{[\s\S]{0,300}invalidateStatusSnapshotCache\(\)/);
 });
 
-test('recent activity supports a filled-orders-only filter', () => {
+test('recent activity distinguishes partial fills and filters both fill types', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const html = fs.readFileSync(path.join(__dirname, '../electron/renderer.html'), 'utf8');
   const renderer = fs.readFileSync(path.join(__dirname, '../electron/renderer.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../src/bot.ts'), 'utf8');
   assert.match(html, /id="recent-activity-filled-only"/);
-  assert.match(html, />Only filled orders</);
-  assert.match(renderer, /entry\?\.event === 'FILLED'/);
-  assert.match(renderer, /filledOnly \? 'No filled orders' : 'No recent activity'/);
+  assert.match(html, />Only partial and fully filled orders</);
+  assert.match(renderer, /entry\?\.event === 'PARTIAL_FILL' \|\| entry\?\.event === 'FILLED'/);
+  assert.match(renderer, /activity-badge partial[^\n]*'PARTIAL'/);
+  assert.match(renderer, /filledOnly \? 'No partial or fully filled orders' : 'No recent activity'/);
+  assert.match(source, /fill\.kind === 'partial'[\s\S]{0,180}event: 'PARTIAL_FILL'/);
 });

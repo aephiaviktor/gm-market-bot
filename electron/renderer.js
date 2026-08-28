@@ -941,17 +941,20 @@ function renderInventory(items) {
 
 function getActivityTitle(entry) {
   if (entry.event === 'START') return 'Bot Start';
+  if (entry.event === 'PARTIAL_FILL') return ['PARTIAL', entry.resource || entry.asset || ''].filter(Boolean).join(' · ');
   if (entry.event === 'FILLED') return ['FILLED', entry.resource || entry.asset || ''].filter(Boolean).join(' · ');
   return [entry.event, entry.resource || entry.asset || ''].filter(Boolean).join(' · ');
 }
 
 function getActivityTone(entry) {
+  if (entry.event === 'PARTIAL_FILL') return 'partial';
   if (entry.event === 'FILLED') return 'filled';
   if (entry.event === 'START') return 'start';
   return 'default';
 }
 
 function appendActivityBadge(parent, entry) {
+  if (entry.event === 'PARTIAL_FILL') parent.appendChild(createNode('span', 'badge activity-badge partial', 'PARTIAL'));
   if (entry.event === 'FILLED') parent.appendChild(createNode('span', 'badge activity-badge filled', 'FILLED'));
   if (entry.event === 'START') parent.appendChild(createNode('span', 'badge activity-badge start', 'START'));
 }
@@ -960,12 +963,12 @@ function renderRecentActivity(items) {
   recentActivityItems = Array.isArray(items) ? items : [];
   const filledOnly = Boolean(recentActivityFilledOnlyEl?.checked);
   const visibleItems = filledOnly
-    ? recentActivityItems.filter((entry) => entry?.event === 'FILLED')
+    ? recentActivityItems.filter((entry) => entry?.event === 'PARTIAL_FILL' || entry?.event === 'FILLED')
     : recentActivityItems;
   recentActivityListEl.replaceChildren();
   setListCount(recentActivityCountEl, visibleItems.length);
   if (!visibleItems.length) {
-    appendEmptyState(recentActivityListEl, filledOnly ? 'No filled orders' : 'No recent activity');
+    appendEmptyState(recentActivityListEl, filledOnly ? 'No partial or fully filled orders' : 'No recent activity');
     return;
   }
 

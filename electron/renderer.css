@@ -393,6 +393,12 @@ h3 {
   border: 1px solid rgba(91, 233, 162, 0.28);
 }
 
+.badge.activity-badge.partial {
+  color: #fff0d1;
+  background: rgba(166, 88, 18, 0.92);
+  border: 1px solid rgba(255, 176, 76, 0.38);
+}
+
 .badge.activity-badge.start {
   color: #dff2ff;
   background: rgba(20, 75, 116, 0.9);
@@ -444,6 +450,11 @@ h3 {
 .activity-item-filled {
   border-color: rgba(91, 233, 162, 0.34);
   background: linear-gradient(180deg, rgba(16, 49, 35, 0.98) 0%, rgba(8, 27, 20, 0.98) 100%);
+}
+
+.activity-item-partial {
+  border-color: rgba(255, 176, 76, 0.42);
+  background: linear-gradient(180deg, rgba(73, 43, 14, 0.98) 0%, rgba(42, 25, 9, 0.98) 100%);
 }
 
 .activity-item-start {
