@@ -1456,6 +1456,17 @@ export type OrderFillEvent =
       remaining: 0;
     };
 
+export function classifyImmediateBuyFill(
+  targetQuantity: number,
+  filledQuantity: number,
+): { event: 'PARTIAL_FILL' | 'FILLED'; remaining: number } {
+  const remaining = Math.max(0, Math.floor(targetQuantity) - Math.floor(filledQuantity));
+  return {
+    event: remaining > 0 ? 'PARTIAL_FILL' : 'FILLED',
+    remaining,
+  };
+}
+
 export function classifyOrderFillEvents(
   previousOpenOrders: Record<string, OrderSnapshot>,
   currentOrders: Order[],
@@ -2199,6 +2210,7 @@ export class GmMarketBot {
     resource: ResourceConfig,
     sellOrder: Order,
     quantity: number,
+    targetQuantity: number,
     quoteMint: PublicKey,
   ): Promise<string> {
     const quoteSymbol = getQuoteSymbolForMint(quoteMint);
@@ -2216,8 +2228,9 @@ export class GmMarketBot {
     this.invalidateMarketLeaderCacheForMint(resource.mint.toBase58());
     this.walletBalanceCache.delete(resource.mint.toBase58());
     this.walletBalanceCache.delete(quoteMint.toBase58());
+    const fill = classifyImmediateBuyFill(targetQuantity, quantity);
     await this.appendLog({
-      event: 'FILLED',
+      event: fill.event,
       side: 'buy',
       resource: resource.name,
       mint: resource.mint.toBase58(),
@@ -2225,8 +2238,11 @@ export class GmMarketBot {
       tx: sig,
       price: sellOrder.uiPrice,
       quantity,
+      remaining: fill.remaining,
       currency: quoteSymbol,
-      message: `Filled external sell order (${quantity} @ ${sellOrder.uiPrice}).`,
+      message: fill.event === 'PARTIAL_FILL'
+        ? `Filled external sell order +${quantity}. Remaining ${fill.remaining}/${targetQuantity}.`
+        : `Filled external sell order (${quantity} @ ${sellOrder.uiPrice}).`,
     });
     return sig;
   }
@@ -2562,7 +2578,7 @@ export class GmMarketBot {
       for (const order of myOrders) {
         await this.cancelOrder(order, resource, 'buy', cancelledIds);
       }
-      await this.fillSellOrder(resource, immediateSellOrder, fillQuantity, quoteMint);
+      await this.fillSellOrder(resource, immediateSellOrder, fillQuantity, targetQuantity, quoteMint);
       return;
     }
 
@@ -2806,6 +2822,7 @@ export class GmMarketBot {
         resource,
         immediateDesired.immediateSellOrder,
         fillQuantity,
+        immediateDesired.targetQuantity,
         quoteMint,
       );
       return;

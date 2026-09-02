@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  classifyImmediateBuyFill,
   classifyOrderFillEvents,
   normalizeLoadedState,
   reconcileUnconfiguredOrderSide,
@@ -65,6 +66,17 @@ test('fill classification reports partial and full fills while suppressing cance
 test('an unchanged open order does not produce a fill event', () => {
   const previous = { 'order-1': { price: 1.25, remaining: 10, quantity: 10 } };
   assert.deepEqual(classifyOrderFillEvents(previous, [order('order-1', 10, 1.25, 10)], new Set()), []);
+});
+
+test('immediate external buys are partial until the remaining rule target is reached', () => {
+  assert.deepEqual(classifyImmediateBuyFill(5_000_000, 1_346_515), {
+    event: 'PARTIAL_FILL',
+    remaining: 3_653_485,
+  });
+  assert.deepEqual(classifyImmediateBuyFill(3_653_485, 3_653_485), {
+    event: 'FILLED',
+    remaining: 0,
+  });
 });
 
 test('unconfigured order side is reconciled from the chain snapshot without retaining stale orders', () => {
