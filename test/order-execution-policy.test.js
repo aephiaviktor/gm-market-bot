@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  enqueueKeyedSerializedTask,
   enqueueSerializedTask,
   getRuleExecutionPolicy,
 } = require('../dist/bot');
@@ -55,6 +56,38 @@ test('serialized transaction queue recovers after a failed task', async () => {
 
   await assert.rejects(first.result, /submission failed/);
   assert.equal(await second.result, 'recovered');
+});
+
+test('scheduled and rerun work for the same asset cannot overlap', async () => {
+  const queues = new Map();
+  const events = [];
+  let releaseScheduled;
+  const scheduledGate = new Promise((resolve) => { releaseScheduled = resolve; });
+
+  const scheduled = enqueueKeyedSerializedTask(queues, 'electronics', async () => {
+    events.push('scheduled:start');
+    await scheduledGate;
+    events.push('scheduled:end');
+  });
+  const rerun = enqueueKeyedSerializedTask(queues, 'electronics', async () => {
+    events.push('rerun:start');
+    events.push('rerun:end');
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(events, ['scheduled:start']);
+  releaseScheduled();
+  await scheduled.result;
+  await rerun.result;
+  assert.deepEqual(events, ['scheduled:start', 'scheduled:end', 'rerun:start', 'rerun:end']);
+});
+
+test('every asset-rule group entry point uses the keyed reconciliation queue', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
+  assert.match(
+    source,
+    /async processAssetRuleGroup\(group: GroupedAssetRules\)[\s\S]{0,500}enqueueKeyedSerializedTask\([\s\S]{0,300}processAssetRuleGroupUnlocked\(group\)/,
+  );
 });
 
 test('multiple buy rules are reconciled independently while duplicate sells remain blocked', () => {

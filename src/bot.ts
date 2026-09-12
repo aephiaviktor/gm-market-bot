@@ -1499,6 +1499,41 @@ export function classifyOrderFillEvents(
   return events;
 }
 
+export async function confirmOrderFillEvents(
+  candidates: OrderFillEvent[],
+  orderAccountExists: (orderId: string) => Promise<boolean>,
+): Promise<{
+  events: OrderFillEvent[];
+  stillOpenOrderIds: Set<string>;
+  verificationFailedOrderIds: Set<string>;
+}> {
+  const events: OrderFillEvent[] = [];
+  const stillOpenOrderIds = new Set<string>();
+  const verificationFailedOrderIds = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (candidate.kind === 'partial') {
+      events.push(candidate);
+      continue;
+    }
+
+    try {
+      if (await orderAccountExists(candidate.orderId)) {
+        stillOpenOrderIds.add(candidate.orderId);
+      } else {
+        events.push(candidate);
+      }
+    } catch {
+      // A failed verification must never turn an uncertain disappearance into
+      // a financial event. Keep tracking the order and retry on a later scan.
+      stillOpenOrderIds.add(candidate.orderId);
+      verificationFailedOrderIds.add(candidate.orderId);
+    }
+  }
+
+  return { events, stillOpenOrderIds, verificationFailedOrderIds };
+}
+
 export function reconcileUnconfiguredOrderSide(
   state: BotState,
   mintKey: string,
@@ -1559,6 +1594,21 @@ export function enqueueSerializedTask<T>(
     () => undefined,
   );
   return { result, nextTail };
+}
+
+export function enqueueKeyedSerializedTask<K, T>(
+  currentTails: Map<K, Promise<void>>,
+  key: K,
+  task: () => Promise<T>,
+): { result: Promise<T>; nextTail: Promise<void> } {
+  const queued = enqueueSerializedTask(currentTails.get(key) ?? Promise.resolve(), task);
+  currentTails.set(key, queued.nextTail);
+  void queued.nextTail.then(() => {
+    if (currentTails.get(key) === queued.nextTail) {
+      currentTails.delete(key);
+    }
+  });
+  return queued;
 }
 
 function getOrderBookQuantity(order: Order): number {
@@ -1741,6 +1791,7 @@ export class GmMarketBot {
   private solBalanceCache: number | null = null;
   private statusSnapshotCache: { expiresAt: number; snapshot: BotStatusSnapshot } | null = null;
   private transactionSubmissionQueue: Promise<void> = Promise.resolve();
+  private readonly assetRuleGroupQueues = new Map<string, Promise<void>>();
   private nextTransactionSubmitAtMs = 0;
 
   constructor(
@@ -2258,7 +2309,26 @@ export class GmMarketBot {
     const sideState = getSideState(resourceState, side);
     const currentIds = new Set(currentOrders.map((order) => order.id));
     const suppressedOrderIds = new Set([...cancelledIds, ...this.recentlyCancelledOrderIds]);
-    const fillEvents = classifyOrderFillEvents(sideState.openOrders, currentOrders, suppressedOrderIds);
+    const fillCandidates = classifyOrderFillEvents(sideState.openOrders, currentOrders, suppressedOrderIds);
+    let fillEvents = fillCandidates;
+    let stillOpenOrderIds = new Set<string>();
+    let verificationFailedOrderIds = new Set<string>();
+
+    if (fillCandidates.some((candidate) => candidate.kind === 'full')) {
+      clearConnectionLookupCache(this.connection);
+      ({
+        events: fillEvents,
+        stillOpenOrderIds,
+        verificationFailedOrderIds,
+      } = await confirmOrderFillEvents(
+        fillCandidates,
+        async (orderId) => Boolean(await this.connection.getAccountInfo(new PublicKey(orderId), 'confirmed')),
+      ));
+    }
+
+    for (const orderId of verificationFailedOrderIds) {
+      this.logger.warn(`Could not verify whether missing ${side} order ${orderId} is closed; retaining it without recording a fill.`);
+    }
 
     for (const fill of fillEvents) {
       const { orderId, meta } = fill;
@@ -2304,6 +2374,13 @@ export class GmMarketBot {
         quantity: getOrderTrackedQuantity(order),
         updatedAt: now,
       };
+    }
+
+    for (const orderId of stillOpenOrderIds) {
+      const previous = sideState.openOrders[orderId];
+      if (previous && !nextSideState.openOrders[orderId]) {
+        nextSideState.openOrders[orderId] = previous;
+      }
     }
 
     if (side === 'buy') {
@@ -2912,7 +2989,17 @@ export class GmMarketBot {
     await this.processSellRule(resource, this.config.minSellQuantity, this.config.minPrice);
   }
 
-  private async processAssetRuleGroup(group: GroupedAssetRules) {
+  async processAssetRuleGroup(group: GroupedAssetRules) {
+    const key = normalizeAssetKey(group.asset);
+    const queued = enqueueKeyedSerializedTask(
+      this.assetRuleGroupQueues,
+      key,
+      () => this.processAssetRuleGroupUnlocked(group),
+    );
+    return await queued.result;
+  }
+
+  private async processAssetRuleGroupUnlocked(group: GroupedAssetRules) {
     const asset = group.asset;
     const rules = group.rules;
 

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   classifyImmediateBuyFill,
   classifyOrderFillEvents,
+  confirmOrderFillEvents,
   normalizeLoadedState,
   reconcileUnconfiguredOrderSide,
   removeTrackedOrder,
@@ -66,6 +67,33 @@ test('fill classification reports partial and full fills while suppressing cance
 test('an unchanged open order does not produce a fill event', () => {
   const previous = { 'order-1': { price: 1.25, remaining: 10, quantity: 10 } };
   assert.deepEqual(classifyOrderFillEvents(previous, [order('order-1', 10, 1.25, 10)], new Set()), []);
+});
+
+test('a missing snapshot is not a full fill while the order account still exists', async () => {
+  const previous = {
+    'still-open': { price: 0.00395, remaining: 8_000_000, quantity: 8_000_000 },
+    closed: { price: 0.004, remaining: 5_000_000, quantity: 5_000_000 },
+  };
+  const candidates = classifyOrderFillEvents(previous, [], new Set());
+
+  const result = await confirmOrderFillEvents(candidates, async (orderId) => orderId === 'still-open');
+
+  assert.deepEqual(result.events, [
+    { kind: 'full', orderId: 'closed', meta: previous.closed, remaining: 0 },
+  ]);
+  assert.deepEqual([...result.stillOpenOrderIds], ['still-open']);
+});
+
+test('failed order-account verification fails closed and preserves the tracked order', async () => {
+  const previous = { uncertain: { price: 0.00395, remaining: 8_000_000, quantity: 8_000_000 } };
+  const candidates = classifyOrderFillEvents(previous, [], new Set());
+
+  const result = await confirmOrderFillEvents(candidates, async () => {
+    throw new Error('RPC unavailable');
+  });
+
+  assert.deepEqual(result.events, []);
+  assert.deepEqual([...result.stillOpenOrderIds], ['uncertain']);
 });
 
 test('immediate external buys are partial until the remaining rule target is reached', () => {
@@ -131,6 +159,12 @@ test('buy replacement carries cancellation suppression into post-placement recon
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
   assert.match(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, cancelledIds, quoteMint\)/);
   assert.doesNotMatch(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, new Set<string>\(\), quoteMint\)/);
+});
+
+test('missing full-fill candidates require a direct order-account check and retained orders remain tracked', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
+  assert.match(source, /confirmOrderFillEvents\([\s\S]{0,300}getAccountInfo\(new PublicKey\(orderId\), 'confirmed'\)/);
+  assert.match(source, /for \(const orderId of stillOpenOrderIds\)[\s\S]{0,300}nextSideState\.openOrders\[orderId\] = previous/);
 });
 
 test('running status uses cycle-reconciled open orders instead of repeating chain scans', () => {
