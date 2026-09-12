@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   classifyImmediateBuyFill,
+  classifyOrderClosureFromTransactionLogs,
   classifyOrderFillEvents,
   confirmOrderFillEvents,
   normalizeLoadedState,
@@ -69,22 +70,40 @@ test('an unchanged open order does not produce a fill event', () => {
   assert.deepEqual(classifyOrderFillEvents(previous, [order('order-1', 10, 1.25, 10)], new Set()), []);
 });
 
-test('a missing snapshot is not a full fill while the order account still exists', async () => {
-  const previous = {
-    'still-open': { price: 0.00395, remaining: 8_000_000, quantity: 8_000_000 },
-    closed: { price: 0.004, remaining: 5_000_000, quantity: 5_000_000 },
-  };
-  const candidates = classifyOrderFillEvents(previous, [], new Set());
-
-  const result = await confirmOrderFillEvents(candidates, async (orderId) => orderId === 'still-open');
-
-  assert.deepEqual(result.events, [
-    { kind: 'full', orderId: 'closed', meta: previous.closed, remaining: 0 },
-  ]);
-  assert.deepEqual([...result.stillOpenOrderIds], ['still-open']);
+test('GM transaction logs distinguish cancellations from fills', () => {
+  assert.equal(classifyOrderClosureFromTransactionLogs([
+    'Program traderDnaR5w6Tcoi3NFm53i48FTDNbGjBSZwWXDRrg invoke [1]',
+    'Program log: Instruction: ProcessCancel',
+  ]), 'cancelled');
+  assert.equal(classifyOrderClosureFromTransactionLogs([
+    'Program traderDnaR5w6Tcoi3NFm53i48FTDNbGjBSZwWXDRrg invoke [1]',
+    'Program log: Instruction: ProcessExchange',
+  ]), 'filled');
+  assert.equal(classifyOrderClosureFromTransactionLogs(['Program log: unrelated']), 'unknown');
+  assert.equal(classifyOrderClosureFromTransactionLogs(null), 'unknown');
 });
 
-test('failed order-account verification fails closed and preserves the tracked order', async () => {
+test('missing orders require authoritative closure classification before recording a full fill', async () => {
+  const previous = {
+    'still-open': { price: 0.00395, remaining: 8_000_000, quantity: 8_000_000 },
+    filled: { price: 0.004, remaining: 5_000_000, quantity: 5_000_000 },
+    cancelled: { price: 0.09, remaining: 1_011_579, quantity: 1_011_579 },
+    ambiguous: { price: 0.2, remaining: 50, quantity: 50 },
+  };
+  const candidates = classifyOrderFillEvents(previous, [], new Set());
+  const dispositions = { 'still-open': 'open', filled: 'filled', cancelled: 'cancelled', ambiguous: 'unknown' };
+
+  const result = await confirmOrderFillEvents(candidates, async (orderId) => dispositions[orderId]);
+
+  assert.deepEqual(result.events, [
+    { kind: 'full', orderId: 'filled', meta: previous.filled, remaining: 0 },
+  ]);
+  assert.deepEqual([...result.stillOpenOrderIds], ['still-open', 'ambiguous']);
+  assert.deepEqual([...result.cancelledOrderIds], ['cancelled']);
+  assert.deepEqual([...result.verificationFailedOrderIds], ['ambiguous']);
+});
+
+test('failed order-closure verification fails closed and preserves the tracked order', async () => {
   const previous = { uncertain: { price: 0.00395, remaining: 8_000_000, quantity: 8_000_000 } };
   const candidates = classifyOrderFillEvents(previous, [], new Set());
 
@@ -94,6 +113,7 @@ test('failed order-account verification fails closed and preserves the tracked o
 
   assert.deepEqual(result.events, []);
   assert.deepEqual([...result.stillOpenOrderIds], ['uncertain']);
+  assert.deepEqual([...result.verificationFailedOrderIds], ['uncertain']);
 });
 
 test('immediate external buys are partial until the remaining rule target is reached', () => {
@@ -161,9 +181,11 @@ test('buy replacement carries cancellation suppression into post-placement recon
   assert.doesNotMatch(source, /placeOrder\(resource, 'buy', targetPrice, targetQuantity, new Set<string>\(\), quoteMint\)/);
 });
 
-test('missing full-fill candidates require a direct order-account check and retained orders remain tracked', () => {
+test('missing full-fill candidates inspect the closing transaction and retain ambiguous orders', () => {
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/bot.ts'), 'utf8');
-  assert.match(source, /confirmOrderFillEvents\([\s\S]{0,300}getAccountInfo\(new PublicKey\(orderId\), 'confirmed'\)/);
+  assert.match(source, /inspectOrderClosure[\s\S]{0,500}getAccountInfo\(orderAddress, 'confirmed'\)/);
+  assert.match(source, /getSignaturesForAddress\([\s\S]{0,120}\{ limit: 1 \}/);
+  assert.match(source, /getTransaction\(closingSignature\.signature[\s\S]{0,250}classifyOrderClosureFromTransactionLogs/);
   assert.match(source, /for \(const orderId of stillOpenOrderIds\)[\s\S]{0,300}nextSideState\.openOrders\[orderId\] = previous/);
 });
 

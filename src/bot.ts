@@ -1499,16 +1499,36 @@ export function classifyOrderFillEvents(
   return events;
 }
 
+export type OrderClosureDisposition = 'open' | 'filled' | 'cancelled' | 'unknown';
+
+export function classifyOrderClosureFromTransactionLogs(
+  logMessages: readonly string[] | null | undefined,
+): Exclude<OrderClosureDisposition, 'open'> {
+  if (!logMessages) return 'unknown';
+
+  if (logMessages.some((message) => message.includes('Instruction: ProcessCancel'))) {
+    return 'cancelled';
+  }
+
+  if (logMessages.some((message) => message.includes('Instruction: ProcessExchange'))) {
+    return 'filled';
+  }
+
+  return 'unknown';
+}
+
 export async function confirmOrderFillEvents(
   candidates: OrderFillEvent[],
-  orderAccountExists: (orderId: string) => Promise<boolean>,
+  inspectOrderClosure: (orderId: string) => Promise<OrderClosureDisposition>,
 ): Promise<{
   events: OrderFillEvent[];
   stillOpenOrderIds: Set<string>;
+  cancelledOrderIds: Set<string>;
   verificationFailedOrderIds: Set<string>;
 }> {
   const events: OrderFillEvent[] = [];
   const stillOpenOrderIds = new Set<string>();
+  const cancelledOrderIds = new Set<string>();
   const verificationFailedOrderIds = new Set<string>();
 
   for (const candidate of candidates) {
@@ -1518,10 +1538,16 @@ export async function confirmOrderFillEvents(
     }
 
     try {
-      if (await orderAccountExists(candidate.orderId)) {
+      const disposition = await inspectOrderClosure(candidate.orderId);
+      if (disposition === 'open') {
         stillOpenOrderIds.add(candidate.orderId);
-      } else {
+      } else if (disposition === 'filled') {
         events.push(candidate);
+      } else if (disposition === 'cancelled') {
+        cancelledOrderIds.add(candidate.orderId);
+      } else {
+        stillOpenOrderIds.add(candidate.orderId);
+        verificationFailedOrderIds.add(candidate.orderId);
       }
     } catch {
       // A failed verification must never turn an uncertain disappearance into
@@ -1531,7 +1557,7 @@ export async function confirmOrderFillEvents(
     }
   }
 
-  return { events, stillOpenOrderIds, verificationFailedOrderIds };
+  return { events, stillOpenOrderIds, cancelledOrderIds, verificationFailedOrderIds };
 }
 
 export function reconcileUnconfiguredOrderSide(
@@ -2298,6 +2324,33 @@ export class GmMarketBot {
     return sig;
   }
 
+  private async inspectOrderClosure(orderId: string): Promise<OrderClosureDisposition> {
+    const orderAddress = new PublicKey(orderId);
+    clearConnectionLookupCache(this.connection);
+    if (await this.connection.getAccountInfo(orderAddress, 'confirmed')) {
+      return 'open';
+    }
+
+    // Both a full exchange and a cancellation close the order account. The
+    // latest successful transaction touching that account is therefore the
+    // authoritative way to distinguish those terminal outcomes.
+    const signatures = await this.connection.getSignaturesForAddress(
+      orderAddress,
+      { limit: 1 },
+      'confirmed',
+    );
+    const closingSignature = signatures[0];
+    if (!closingSignature || closingSignature.err) {
+      return 'unknown';
+    }
+
+    const transaction = await this.connection.getTransaction(closingSignature.signature, {
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
+    });
+    return classifyOrderClosureFromTransactionLogs(transaction?.meta?.logMessages);
+  }
+
   private async detectFills(
     resource: ResourceConfig,
     side: AssetRuleSide,
@@ -2312,22 +2365,27 @@ export class GmMarketBot {
     const fillCandidates = classifyOrderFillEvents(sideState.openOrders, currentOrders, suppressedOrderIds);
     let fillEvents = fillCandidates;
     let stillOpenOrderIds = new Set<string>();
+    let cancelledOrderIds = new Set<string>();
     let verificationFailedOrderIds = new Set<string>();
 
     if (fillCandidates.some((candidate) => candidate.kind === 'full')) {
-      clearConnectionLookupCache(this.connection);
       ({
         events: fillEvents,
         stillOpenOrderIds,
+        cancelledOrderIds,
         verificationFailedOrderIds,
       } = await confirmOrderFillEvents(
         fillCandidates,
-        async (orderId) => Boolean(await this.connection.getAccountInfo(new PublicKey(orderId), 'confirmed')),
+        async (orderId) => await this.inspectOrderClosure(orderId),
       ));
     }
 
     for (const orderId of verificationFailedOrderIds) {
-      this.logger.warn(`Could not verify whether missing ${side} order ${orderId} is closed; retaining it without recording a fill.`);
+      this.logger.warn(`Could not classify how missing ${side} order ${orderId} closed; retaining it without recording a fill.`);
+    }
+
+    for (const orderId of cancelledOrderIds) {
+      this.logger.info(`Missing ${side} order ${orderId} was closed by cancellation; no fill recorded.`);
     }
 
     for (const fill of fillEvents) {
