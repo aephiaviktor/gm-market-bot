@@ -3,6 +3,7 @@ import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import { GmClientService, Order, OrderSide } from '@staratlas/factory';
 import { getAssociatedTokenAddress } from '@solana/spl-token';
 import { RpcLimiter } from 'rpc_limiter';
+import { createLimiterMetricsShutdown, LIMITER_METRICS_SHUTDOWN_MAX_MS, type LimiterMetricsShutdown } from './limiter-metrics-shutdown';
 import bs58 from 'bs58';
 import fs from 'fs/promises';
 import path from 'path';
@@ -53,15 +54,19 @@ const SHIP_MINTS = new Set(
     : [],
 );
 const CLEAR_CONNECTION_LOOKUP_CACHE = Symbol('clearConnectionLookupCache');
+const CLOSE_SHARED_LIMITER_METRICS = Symbol('closeSharedLimiterMetrics');
 
 type CachedRpcConnection = Connection & {
   [CLEAR_CONNECTION_LOOKUP_CACHE]?: () => void;
+  [CLOSE_SHARED_LIMITER_METRICS]?: (deadlineAtMs: number) => Promise<void>;
 };
 
 type SharedLimiterWaitResult = { provider: 'main' | 'fallback' };
 type SharedLimiterLike = {
   wait(bucketName: 'rpc:shared' | 'tx:shared', options: unknown): Promise<SharedLimiterWaitResult>;
   recordProviderOutcome?: RpcLimiter['recordProviderOutcome'];
+  flushMetrics?: (deadlineAtMs: number) => Promise<boolean>;
+  closeMetrics?: (deadlineAtMs: number) => Promise<void>;
 };
 
 export function isRpcLimiterLockContentionError(error: unknown): boolean {
@@ -80,6 +85,7 @@ export class RpcRequestRateLimiter {
   private readonly lockRetryDelaysMs: number[];
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly lastSharedWaitLogAtMs = new Map<string, number>();
+  private readonly limiterMetricsShutdown: LimiterMetricsShutdown;
 
   constructor(
     private readonly getRequestsPerSecond: () => number,
@@ -96,6 +102,7 @@ export class RpcRequestRateLimiter {
     this.sharedLimiter = testOptions?.sharedLimiter ?? new RpcLimiter();
     this.lockRetryDelaysMs = testOptions?.lockRetryDelaysMs ?? RPC_LIMITER_LOCK_RETRY_DELAYS_MS;
     this.sleepFn = testOptions?.sleepFn ?? sleep;
+    this.limiterMetricsShutdown = createLimiterMetricsShutdown(this.logger);
   }
 
   private async waitOnSharedLimiter(
@@ -186,6 +193,15 @@ export class RpcRequestRateLimiter {
   /** Expose the shared limiter so callers can report 429s back to it. */
   getSharedLimiter(): SharedLimiterLike | null {
     return this.useSharedLimiter() ? this.sharedLimiter : null;
+  }
+
+  /**
+   * Idempotently close the shared limiter's metrics worker within
+   * `deadlineAtMs`. Never rejects and never delays longer than the deadline.
+   * Repeated calls return the same in-flight shutdown.
+   */
+  closeSharedLimiterMetrics(deadlineAtMs: number): Promise<void> {
+    return this.limiterMetricsShutdown.close(this.sharedLimiter, deadlineAtMs);
   }
 }
 
@@ -323,6 +339,9 @@ function createFailoverConnection(
     get(target, prop, receiver) {
       if (prop === CLEAR_CONNECTION_LOOKUP_CACHE) {
         return clearLookupCache;
+      }
+      if (prop === CLOSE_SHARED_LIMITER_METRICS) {
+        return (deadlineAtMs: number) => limiter.closeSharedLimiterMetrics(deadlineAtMs);
       }
 
       const primaryValue = Reflect.get(target, prop, receiver);
@@ -1917,6 +1936,17 @@ export class GmMarketBot {
     if (this.loopTimer) {
       clearTimeout(this.loopTimer);
       this.loopTimer = null;
+    }
+    await this.closeSharedLimiterMetrics();
+  }
+
+  private async closeSharedLimiterMetrics(): Promise<void> {
+    const closeMetrics = (this.connection as CachedRpcConnection)[CLOSE_SHARED_LIMITER_METRICS];
+    if (typeof closeMetrics !== 'function') return;
+    try {
+      await closeMetrics(Date.now() + LIMITER_METRICS_SHUTDOWN_MAX_MS);
+    } catch (error) {
+      this.logger.warn(`Shared limiter metrics shutdown failed (non-fatal): ${getErrorText(error)}`);
     }
   }
 
