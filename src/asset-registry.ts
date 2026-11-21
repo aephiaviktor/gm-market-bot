@@ -23,6 +23,7 @@ export const GM_MARKET_ASSET_REGISTRY: AssetRegistryEntry[] = [
   { name: 'Silica', mint: 'SiLiCA4xKGkyymB5XteUVmUeLqE4JGQTyWBpKFESLgh' },
   { name: 'Titanium Ore', mint: 'tiorehR1rLfeATZ96YoByUkvNFsBfUUSQWgSH2mizXL' },
   { name: 'Ammo', mint: 'ammoK8AkX2wnebQb35cDAZtTkvsXQbi82cGeTnUvvfK' },
+  { name: 'Aerogel', mint: 'aeroBCMu6AX6bCLYd1VQtigqZh8NGSjn54H1YSczHeJ' },
   { name: 'Copper', mint: 'CPPRam7wKuBkYzN5zCffgNU17RKaeMEns4ZD83BqBVNR' },
   { name: 'Copper Wire', mint: 'cwirGHLB2heKjCeTy4Mbp4M443fU4V7vy2JouvYbZna' },
   { name: 'Crystal Lattice', mint: 'CRYSNnUd7cZvVfrEVtVNKmXiCPYdZ1S5pM5qG2FDVZHF' },
