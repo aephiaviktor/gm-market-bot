@@ -130,12 +130,19 @@ jobs:
           if ((Get-Item "release/$setupName.blockmap").Length -le 0) {
             throw 'The installer blockmap is empty.'
           }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gm-market-bot-windows-v0.3.58
+          path: |
+            release/*.exe
+            release/*.yml
+            release/*.blockmap
       - name: Push the checked history and new tag using leases
         shell: bash
         env:
           RELEASE_COMMIT: ${{ steps.prepare.outputs.commit }}
         run: |
-          git push --atomic \
+          git push --atomic origin \
             "--force-with-lease=refs/heads/main:$OLD_MAIN" \
             "--force-with-lease=refs/heads/compact-asset-rule-headers:$OLD_PR" \
             "--force-with-lease=refs/tags/$RELEASE_TAG:" \
@@ -195,10 +202,3 @@ jobs:
           }
           gh release edit $env:RELEASE_TAG --repo $repo --draft=false --latest --verify-tag
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the checked release draft.' }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: gm-market-bot-windows-v0.3.58
-          path: |
-            release/*.exe
-            release/*.yml
-            release/*.blockmap
