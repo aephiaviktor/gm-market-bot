@@ -51,6 +51,7 @@ const rpcLimiterStatePathEl = document.getElementById('rpc-limiter-state-path');
 const rpcLimiterActiveEl = document.getElementById('rpc-limiter-active');
 const rpcLimiterUpdatedEl = document.getElementById('rpc-limiter-updated');
 const assetRulesBody = document.getElementById('asset-rules-body');
+const rulePriceUnitLabels = document.querySelectorAll('[data-rule-price-unit]');
 let assetRegistryResourceList = '';
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
@@ -426,12 +427,11 @@ function createRuleInputCell(index, field, options = {}) {
   if (options.autocomplete) input.autocomplete = options.autocomplete;
   if (options.spellcheck !== undefined) input.spellcheck = options.spellcheck;
   stack.appendChild(input);
-  if (options.hint) stack.appendChild(createNode('span', 'cell-hint', options.hint));
   cell.appendChild(stack);
   return cell;
 }
 
-function createAssetRuleRowElement(index, priceUnit) {
+function createAssetRuleRowElement(index) {
   const row = document.createElement('tr');
   const enableCell = createNode('td', 'enable-cell');
   const enabledInput = document.createElement('input');
@@ -448,10 +448,10 @@ function createAssetRuleRowElement(index, priceUnit) {
   assetCell.appendChild(assetSelect);
   row.appendChild(assetCell);
 
-  row.appendChild(createRuleInputCell(index, 'minQuantity', { stackClass: 'compact-cell', inputMode: 'numeric', autocomplete: 'off', spellcheck: false, hint: 'Min order' }));
-  row.appendChild(createRuleInputCell(index, 'maxQuantity', { stackClass: 'compact-cell', inputMode: 'numeric', autocomplete: 'off', spellcheck: false, hint: 'Max active' }));
+  row.appendChild(createRuleInputCell(index, 'minQuantity', { stackClass: 'compact-cell', inputMode: 'numeric', autocomplete: 'off', spellcheck: false }));
+  row.appendChild(createRuleInputCell(index, 'maxQuantity', { stackClass: 'compact-cell', inputMode: 'numeric', autocomplete: 'off', spellcheck: false }));
   for (const field of ['minBuyPrice', 'maxBuyPrice', 'minSellPrice', 'maxSellPrice']) {
-    row.appendChild(createRuleInputCell(index, field, { stackClass: 'price-cell', type: 'number', min: 0, step: '0.000001', inputMode: 'decimal', hint: priceUnit }));
+    row.appendChild(createRuleInputCell(index, field, { stackClass: 'price-cell', type: 'number', min: 0, step: '0.000001', inputMode: 'decimal' }));
   }
 
   const actionsCell = createNode('td', 'remove-cell');
@@ -472,6 +472,9 @@ function renderAssetRuleRows() {
   syncRowsWithResources();
   const isShipMarket = activeAssetRuleGroup === 'ships' || activeAssetRuleGroup === 'ship-parts';
   const priceUnit = isShipMarket ? 'USDC' : 'ATLAS';
+  for (const label of rulePriceUnitLabels) {
+    label.textContent = priceUnit;
+  }
   const allOptions = getAllResourceOptions();
   const options = getResourceOptions(activeAssetRuleGroup);
   const visibleRows = assetRuleRows
@@ -513,7 +516,7 @@ function renderAssetRuleRows() {
   }
 
   visibleRows.forEach(({ row, index }) => {
-    const tr = createAssetRuleRowElement(index, priceUnit);
+    const tr = createAssetRuleRowElement(index);
 
     const assetSelect = tr.querySelector('[data-field="asset"]');
     const enabledInput = tr.querySelector('[data-field="enabled"]');
