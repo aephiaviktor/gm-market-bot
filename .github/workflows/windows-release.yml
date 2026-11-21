@@ -1,23 +1,108 @@
 name: Build Windows release
 
-on:
-  workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+on: workflow_dispatch
 
 permissions:
   contents: write
 
 jobs:
   windows-release:
+    if: github.repository == 'aephiaviktor/gm-market-bot' && github.ref_name == 'release-v0.3.58'
     runs-on: windows-latest
+    env:
+      OLD_MAIN: 327a1cf7724132cd35d91ebc2be98a2a8fe89b63
+      OLD_PR: 4d918a88cb4d3a20ad6eaff276d76ce5706e0b77
+      RELEASE_TAG: v0.3.58
+      RELEASE_TITLE: Show price currencies in asset rule headers (GM Market Bot 0.3.58)
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 4d918a88cb4d3a20ad6eaff276d76ce5706e0b77
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+      - name: Prepare the verified commit history
+        id: prepare
+        shell: bash
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+          
+          const git = (args, input) => execFileSync('git', args, { encoding: 'utf8', input });
+          const original56 = '8533d36ab41ab5e2366bb122467f1d47a4d2cf9c';
+          const original57 = '327a1cf7724132cd35d91ebc2be98a2a8fe89b63';
+          const originalPR = '4d918a88cb4d3a20ad6eaff276d76ce5706e0b77';
+          const parent55 = '3a6c938bc9b25c2fbc6e134b61bad48ca290cb10';
+          
+          function rewordCommit(commit, oldParent, newParent, oldTitle, newTitle) {
+            const object = git(['cat-file', 'commit', commit]);
+            const separator = object.indexOf('\n\n');
+            assert.ok(separator > 0);
+            const headers = object.slice(0, separator);
+            const message = object.slice(separator + 2);
+            assert.deepEqual(headers.match(/^parent .+$/gm), ['parent ' + oldParent]);
+            assert.equal(message.split('\n')[0], oldTitle);
+          
+            // A signature over the previous parent or message cannot sign the replacement commit.
+            const updatedHeaders = headers
+              .replace('parent ' + oldParent, 'parent ' + newParent)
+              .replace(/^gpgsig(?:-sha256)? [^\n]*(?:\n [^\n]*)*\n?/gm, '')
+              .trimEnd();
+            const replacement = git([
+              'hash-object', '-t', 'commit', '-w', '--stdin',
+            ], updatedHeaders + '\n\n' + newTitle + message.slice(oldTitle.length)).trim();
+            assert.equal(git(['rev-parse', replacement + '^{tree}']), git(['rev-parse', commit + '^{tree}']));
+            return replacement;
+          }
+          
+          assert.equal(git(['rev-parse', 'HEAD']).trim(), originalPR);
+          assert.equal(git(['rev-parse', 'HEAD^']).trim(), original57);
+          assert.equal(git(['status', '--porcelain']).trim(), '');
+          
+          for (const [file, expectedMatches] of [['package.json', 1], ['package-lock.json', 2]]) {
+            const versionLine = /^( +"version": )"0\.3\.57",$/gm;
+            const source = fs.readFileSync(file, 'utf8');
+            assert.equal([...source.matchAll(versionLine)].length, expectedMatches);
+            const updated = source.replace(versionLine, '$1"0.3.58",');
+            const metadata = JSON.parse(updated);
+            assert.equal(metadata.version, '0.3.58');
+            if (file === 'package-lock.json') assert.equal(metadata.packages[''].version, '0.3.58');
+            fs.writeFileSync(file, updated);
+          }
+          
+          const rewritten56 = rewordCommit(original56, parent55, parent55,
+            'Release GM Market Bot 0.3.56 — SQLite RPC metrics', 'Store RPC metrics in SQLite (GM Market Bot 0.3.56)');
+          const rewritten57 = rewordCommit(original57, original56, rewritten56,
+            'Release GM Market Bot 0.3.57 — Add Aerogel', 'Add Aerogel (GM Market Bot 0.3.57)');
+          
+          git(['add', '--', 'package.json', 'package-lock.json']);
+          const tree = git(['write-tree']).trim();
+          const releaseCommit = git([
+            '-c', 'user.name=github-actions[bot]',
+            '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+            'commit-tree', tree, '-p', rewritten57,
+            '-m', 'Show price currencies in asset rule headers (GM Market Bot 0.3.58)',
+            '-m', 'Show ATLAS or USDC on the four price headers and remove repeated hints from the rows. See PR #2.',
+          ]).trim();
+          
+          const expectedPaths = [
+            'electron/renderer.css', 'electron/renderer.html', 'electron/renderer.js',
+            'package-lock.json', 'package.json',
+          ];
+          const actualPaths = git(['diff', '--name-only', rewritten57, releaseCommit]).trim().split('\n');
+          assert.deepEqual(actualPaths, expectedPaths);
+          if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, 'commit=' + releaseCommit + '\n');
+          console.log(JSON.stringify({ rewritten56, rewritten57, releaseCommit, tree }));
+          NODE
+      - name: Check out the candidate release commit
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ steps.prepare.outputs.commit }}
+        run: git checkout --detach "$RELEASE_COMMIT"
       - run: npm ci
       - run: npm test
       - name: Test supervised update restart handshake
@@ -25,55 +110,94 @@ jobs:
         run: ./test/windows-supervisor-handshake.ps1
       - name: Build Windows package without publishing
         run: npm run dist:win
-      - name: Create deterministic draft Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+      - name: Verify installer and updater metadata
+        shell: pwsh
+        run: |
+          $version = '0.3.58'
+          $setupName = "GM-Market-Bot-Setup-$version.exe"
+          Move-Item "release/GM Market Bot Setup $version.exe" "release/$setupName"
+          Move-Item "release/GM Market Bot Setup $version.exe.blockmap" "release/$setupName.blockmap"
+          $manifest = Get-Content -Raw release/latest.yml
+          $sha512 = [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash "release/$setupName" -Algorithm SHA512).Hash))
+          $versionPattern = [regex]::Escape($version)
+          $namePattern = [regex]::Escape($setupName)
+          $hashPattern = [regex]::Escape($sha512)
+          if ($manifest -cnotmatch "(?m)^version: $versionPattern\r?$" -or
+              $manifest -cnotmatch "(?m)^path: $namePattern\r?$" -or
+              $manifest -cnotmatch "(?m)^sha512: $hashPattern\r?$") {
+            throw 'Updater manifest does not match the release installer.'
+          }
+          if ((Get-Item "release/$setupName.blockmap").Length -le 0) {
+            throw 'The installer blockmap is empty.'
+          }
+      - name: Push the checked history and new tag using leases
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ steps.prepare.outputs.commit }}
+        run: |
+          git push --atomic \
+            "--force-with-lease=refs/heads/main:$OLD_MAIN" \
+            "--force-with-lease=refs/heads/compact-asset-rule-headers:$OLD_PR" \
+            "--force-with-lease=refs/tags/$RELEASE_TAG:" \
+            "$RELEASE_COMMIT:refs/heads/compact-asset-rule-headers" \
+            "$RELEASE_COMMIT:refs/heads/main" \
+            "$RELEASE_COMMIT:refs/tags/$RELEASE_TAG"
+      - name: Draft and verify the complete Windows release
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.prepare.outputs.commit }}
         run: |
-          $version = node -p "require('./package.json').version"
-          $tag = "v$version"
-          if ($env:GITHUB_REF_NAME -ne $tag) {
-            throw "Tag $($env:GITHUB_REF_NAME) does not match package version $version."
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = $env:RELEASE_TAG
+          $version = '0.3.58'
+          $assets = @("release/GM-Market-Bot-Setup-$version.exe", "release/GM-Market-Bot-Setup-$version.exe.blockmap", 'release/latest.yml')
+          $tagRef = gh api "repos/$repo/git/ref/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $tagRef.object.sha -cne $env:RELEASE_COMMIT) { throw 'Incorrect release tag.' }
+
+          gh release create $tag @assets --repo $repo --draft --verify-tag --title $env:RELEASE_TITLE --notes 'Price headers show ATLAS or USDC. Asset rule rows no longer repeat the quantity hints or currency labels.'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the complete release draft.' }
+
+          $allReleases = gh api "repos/$repo/releases" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the release draft.' }
+          $draft = $allReleases | Where-Object { $_.tag_name -ceq $tag }
+          if ($null -eq $draft -or -not $draft.draft -or $draft.assets.Count -ne $assets.Count) {
+            throw 'Expected exactly three assets on the release draft.'
           }
-
-          Move-Item "release/GM Market Bot Setup $version.exe" "release/GM-Market-Bot-Setup-$version.exe"
-          Move-Item "release/GM Market Bot Setup $version.exe.blockmap" "release/GM-Market-Bot-Setup-$version.exe.blockmap"
-
-          $assets = @(
-            "release/GM-Market-Bot-Setup-$version.exe",
-            "release/GM-Market-Bot-Setup-$version.exe.blockmap",
-            "release/latest.yml"
+          foreach ($asset in $assets) {
+            $file = Get-Item $asset
+            $digest = 'sha256:' + (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+            $uploaded = $draft.assets | Where-Object { $_.name -ceq $file.Name }
+            if ($null -eq $uploaded -or $uploaded.state -cne 'uploaded' -or $uploaded.size -ne $file.Length -or $uploaded.digest -cne $digest) {
+              throw "GitHub asset does not match $($file.Name)."
+            }
+          }
+      - name: Correct both historical release titles and publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $historic = @(
+            @{ id = 390674280; tag = 'v0.3.56'; title = 'Store RPC metrics in SQLite (GM Market Bot 0.3.56)' },
+            @{ id = 453912638; tag = 'v0.3.57'; title = 'Add Aerogel (GM Market Bot 0.3.57)' }
           )
-          foreach ($asset in $assets) {
-            if (-not (Test-Path $asset -PathType Leaf)) {
-              throw "Required Release asset is missing: $asset"
+          foreach ($release in $historic) {
+            $endpoint = "repos/$repo/releases/$($release.id)"
+            $current = gh api $endpoint | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $current.tag_name -cne $release.tag -or $current.draft) {
+              throw "Unexpected GitHub Release for $($release.tag)."
+            }
+            $updated = gh api --method PATCH $endpoint -f "name=$($release.title)" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $updated.name -cne $release.title) {
+              throw "Could not rename $($release.tag)."
             }
           }
-
-          $existingRelease = gh release view $tag --json isDraft 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            if (-not (($existingRelease | ConvertFrom-Json).isDraft)) {
-              throw "Release $tag is already published; refusing to replace its assets."
-            }
-          } else {
-            gh release create $tag --draft --verify-tag --title $version --notes-from-tag
-            if ($LASTEXITCODE -ne 0) { throw "Could not create draft Release $tag." }
-          }
-
-          gh release upload $tag @assets --clobber
-          if ($LASTEXITCODE -ne 0) { throw "Could not upload the complete asset set for $tag." }
-
-          $uploadedNames = @((gh release view $tag --json assets | ConvertFrom-Json).assets.name)
-          foreach ($asset in $assets) {
-            $name = Split-Path $asset -Leaf
-            if ($name -notin $uploadedNames) {
-              throw "Draft Release $tag is missing uploaded asset $name."
-            }
-          }
+          gh release edit $env:RELEASE_TAG --repo $repo --draft=false --latest --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the checked release draft.' }
       - uses: actions/upload-artifact@v4
         with:
-          name: gm-market-bot-windows-${{ github.ref_name }}
+          name: gm-market-bot-windows-v0.3.58
           path: |
             release/*.exe
             release/*.yml
