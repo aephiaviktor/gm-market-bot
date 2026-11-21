@@ -1,80 +1,60 @@
 name: Build Windows release
 
-on:
-  workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+on: workflow_dispatch
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
-  windows-release:
-    runs-on: windows-latest
+  attach-v0-3-57-assets:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_ID: "453912638"
+      BUILD_RUN_ID: "44938265455"
+      RELEASE_TAG: v0.3.57
+      RELEASE_COMMIT: 327a1cf7724132cd35d91ebc2be98a2a8fe89b63
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      - name: Test supervised update restart handshake
-        shell: pwsh
-        run: ./test/windows-supervisor-handshake.ps1
-      - name: Build Windows package without publishing
-        run: npm run dist:win
-      - name: Create deterministic draft Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check release and build provenance
         run: |
-          $version = node -p "require('./package.json').version"
-          $tag = "v$version"
-          if ($env:GITHUB_REF_NAME -ne $tag) {
-            throw "Tag $($env:GITHUB_REF_NAME) does not match package version $version."
-          }
-
-          Move-Item "release/GM Market Bot Setup $version.exe" "release/GM-Market-Bot-Setup-$version.exe"
-          Move-Item "release/GM Market Bot Setup $version.exe.blockmap" "release/GM-Market-Bot-Setup-$version.exe.blockmap"
-
-          $assets = @(
-            "release/GM-Market-Bot-Setup-$version.exe",
-            "release/GM-Market-Bot-Setup-$version.exe.blockmap",
-            "release/latest.yml"
-          )
-          foreach ($asset in $assets) {
-            if (-not (Test-Path $asset -PathType Leaf)) {
-              throw "Required Release asset is missing: $asset"
-            }
-          }
-
-          $existingRelease = gh release view $tag --json isDraft 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            if (-not (($existingRelease | ConvertFrom-Json).isDraft)) {
-              throw "Release $tag is already published; refusing to replace its assets."
-            }
-          } else {
-            gh release create $tag --draft --verify-tag --title $version --notes-from-tag
-            if ($LASTEXITCODE -ne 0) { throw "Could not create draft Release $tag." }
-          }
-
-          gh release upload $tag @assets --clobber
-          if ($LASTEXITCODE -ne 0) { throw "Could not upload the complete asset set for $tag." }
-
-          $uploadedNames = @((gh release view $tag --json assets | ConvertFrom-Json).assets.name)
-          foreach ($asset in $assets) {
-            $name = Split-Path $asset -Leaf
-            if ($name -notin $uploadedNames) {
-              throw "Draft Release $tag is missing uploaded asset $name."
-            }
-          }
-      - uses: actions/upload-artifact@v4
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" |
+            jq -e --arg commit "$RELEASE_COMMIT" '.head_sha == $commit and .conclusion == "success"' >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" |
+            jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft and .target_commitish == "main"' >/dev/null
+      - uses: actions/download-artifact@v4
         with:
-          name: gm-market-bot-windows-${{ github.ref_name }}
-          path: |
-            release/*.exe
-            release/*.yml
-            release/*.blockmap
+          name: gm-market-bot-windows-main
+          path: windows-assets
+          run-id: ${{ env.BUILD_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Verify and attach Windows assets
+        working-directory: windows-assets
+        run: |
+          mv "GM Market Bot Setup 0.3.57.exe" GM-Market-Bot-Setup-0.3.57.exe
+          mv "GM Market Bot Setup 0.3.57.exe.blockmap" GM-Market-Bot-Setup-0.3.57.exe.blockmap
+          sha256sum --check <<'HASHES'
+          ca54f9bfbe0c239c4c5b1367d28655c91faf8240c1aa10730838d56feac86936  GM-Market-Bot-Setup-0.3.57.exe
+          7feddabadc25fc1345953a81545ae3f60f04c8223267e9e434ef7d82ddffa708  GM-Market-Bot-Setup-0.3.57.exe.blockmap
+          2ebe54c836c0c3e30788367b3055c4e2ef68287ceb4e82d7c8169fdb23ca0e08  latest.yml
+          HASHES
+          release_endpoint="repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          for name in GM-Market-Bot-Setup-0.3.57.exe GM-Market-Bot-Setup-0.3.57.exe.blockmap latest.yml; do
+            digest="sha256:$(sha256sum "$name" | cut -d " " -f 1)"
+            asset_state="$(gh api "$release_endpoint" | jq -r --arg name "$name" --arg digest "$digest" '[.assets[] | select(.name == $name) | (.state == "uploaded" and .digest == $digest)] | if length == 0 then "missing" elif . == [true] then "verified" else "conflict" end')"
+            case "$asset_state" in
+              verified) continue ;;
+              conflict) echo "Draft contains a different asset named $name" >&2; exit 1 ;;
+            esac
+            gh api --method POST -H 'Content-Type: application/octet-stream' --input "$name" \
+              "https://uploads.github.com/$release_endpoint/assets?name=$name" |
+              jq -e --arg name "$name" --arg digest "$digest" '.name == $name and .state == "uploaded" and .digest == $digest' >/dev/null
+          done
+      - name: Create tag at the tested release commit
+        run: |
+          tag_endpoint="repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"
+          if ! gh api "$tag_endpoint" > release-tag.json 2>/dev/null; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$RELEASE_COMMIT" > release-tag.json
+          fi
+          jq -e --arg commit "$RELEASE_COMMIT" '.object.type == "commit" and .object.sha == $commit' release-tag.json >/dev/null
